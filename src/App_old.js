@@ -11,7 +11,6 @@ import LoginPage from './pages/auth/LoginPage';
 import SignupPage from './pages/auth/SignupPage';
 import ForgotPasswordPage from './pages/auth/ForgotPasswordPage';
 import DashboardPage from './pages/DashboardPage';
-import SearchPage from './pages/SearchPage';
 
 // Create a client
 const queryClient = new QueryClient({
@@ -107,14 +106,6 @@ function App() {
                   element={
                     <ProtectedRoute>
                       <DashboardPage />
-                    </ProtectedRoute>
-                  } 
-                />
-                <Route 
-                  path="/search" 
-                  element={
-                    <ProtectedRoute>
-                      <SearchPage />
                     </ProtectedRoute>
                   } 
                 />
