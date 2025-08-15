@@ -10,6 +10,7 @@ import {
   where,
   orderBy,
   limit,
+  startAfter,
   onSnapshot,
   serverTimestamp,
   writeBatch,
@@ -369,80 +370,133 @@ class SocialService {
         limit(50)
       );
 
-      return onSnapshot(q, async (snapshot) => {
-        const notifications = [];
-        
-        for (const docSnap of snapshot.docs) {
-          const notification = { id: docSnap.id, ...docSnap.data() };
-          
-          // Get user profile for the notification sender
-          if (notification.fromUserId) {
-            try {
-              const fromUser = await this.getUserProfile(notification.fromUserId);
-              notification.fromUser = fromUser;
-            } catch (error) {
-              console.warn(`Failed to get profile for notification sender ${notification.fromUserId}:`, error);
+      return onSnapshot(q, 
+        async (snapshot) => {
+          try {
+            const notifications = [];
+            
+            for (const docSnap of snapshot.docs) {
+              const notification = { id: docSnap.id, ...docSnap.data() };
+              
+              // Get user profile for the notification sender
+              if (notification.fromUserId) {
+                try {
+                  const fromUser = await this.getUserProfile(notification.fromUserId);
+                  notification.fromUser = fromUser;
+                } catch (error) {
+                  console.warn(`Failed to get profile for notification sender ${notification.fromUserId}:`, error);
+                }
+              }
+              
+              notifications.push(notification);
             }
+            
+            callback(notifications);
+          } catch (error) {
+            console.error('Error processing notifications:', error);
           }
-          
-          notifications.push(notification);
+        },
+        (error) => {
+          console.error('Notifications listener error:', error);
+          // Return a no-op function to prevent further errors
+          return () => {};
         }
-        
-        callback(notifications);
-      });
+      );
     } catch (error) {
       console.error('Error setting up notifications listener:', error);
-      throw error;
+      // Return a no-op function to prevent crashes
+      return () => {};
     }
   }
 
   subscribeToActivity(userId, callback) {
     try {
       return this.subscribeToNotifications(userId, (notifications) => {
-        const activities = notifications.map(notification => ({
-          id: notification.id,
-          type: notification.type,
-          user: notification.fromUser?.displayName || 'Someone',
-          userAvatar: notification.fromUser?.photoURL,
-          userId: notification.fromUserId,
-          action: this.getActivityAction(notification.type),
-          story: notification.storyTitle,
-          storyId: notification.storyId,
-          time: this.formatTimeAgo(notification.createdAt),
-          timestamp: notification.createdAt,
-          read: notification.read
-        }));
-        
-        callback(activities);
+        try {
+          const activities = notifications.map(notification => ({
+            id: notification.id,
+            type: notification.type,
+            user: notification.fromUser?.displayName || 'Someone',
+            userAvatar: notification.fromUser?.photoURL,
+            userId: notification.fromUserId,
+            action: this.getActivityAction(notification.type),
+            story: notification.storyTitle,
+            storyId: notification.storyId,
+            time: this.formatTimeAgo(notification.createdAt),
+            timestamp: notification.createdAt,
+            read: notification.read
+          }));
+          
+          callback(activities);
+        } catch (error) {
+          console.error('Error processing activities:', error);
+        }
       });
     } catch (error) {
       console.error('Error setting up activity listener:', error);
-      throw error;
+      // Return a no-op function to prevent crashes
+      return () => {};
     }
   }
 
   // ==================== COMMENTS ====================
 
-  async addComment(storyId, userId, content) {
+  async addComment(storyId, userId, content, parentCommentId = null) {
     try {
-      const commentRef = await addDoc(collection(db, 'comments'), {
-        storyId,
+      const batch = writeBatch(db);
+      
+      // Get user profile for comment author
+      const userProfile = await this.getUserProfile(userId);
+      
+      // Create comment document
+      const commentRef = doc(collection(db, 'stories', storyId, 'comments'));
+      const commentData = {
+        storyId, // Add storyId for easier querying
         userId,
+        userName: userProfile?.displayName || 'Anonymous',
+        userAvatar: userProfile?.photoURL || null,
         content,
+        parentCommentId: parentCommentId || null, // Ensure null instead of undefined
+        level: parentCommentId ? 1 : 0, // Will be updated for deeper nesting
         createdAt: serverTimestamp(),
-        likesCount: 0
-      });
+        updatedAt: serverTimestamp(),
+        likesCount: 0,
+        repliesCount: 0,
+        isDeleted: false,
+        isEdited: false
+      };
+
+      // If this is a reply, update parent comment's reply count and level
+      if (parentCommentId) {
+        const parentCommentRef = doc(db, 'stories', storyId, 'comments', parentCommentId);
+        const parentCommentDoc = await getDoc(parentCommentRef);
+        
+        if (parentCommentDoc.exists()) {
+          const parentData = parentCommentDoc.data();
+          commentData.level = Math.min((parentData.level || 0) + 1, 6); // Max depth of 6
+          
+          batch.update(parentCommentRef, {
+            repliesCount: increment(1)
+          });
+        }
+      }
+
+      batch.set(commentRef, commentData);
 
       // Update story comments count
       const storyRef = doc(db, 'stories', storyId);
-      await updateDoc(storyRef, {
+      batch.update(storyRef, {
         'stats.commentsCount': increment(1)
       });
 
-      // Create notification for story author
+      await batch.commit();
+
+      // Create notification for story author (and parent comment author if reply)
       const storyDoc = await getDoc(storyRef);
       if (storyDoc.exists()) {
         const story = storyDoc.data();
+        
+        // Notify story author
         if (story.authorId !== userId) {
           await addDoc(collection(db, 'notifications'), {
             userId: story.authorId,
@@ -455,45 +509,327 @@ class SocialService {
             read: false
           });
         }
+
+        // Notify parent comment author if this is a reply
+        if (parentCommentId) {
+          const parentCommentRef = doc(db, 'stories', storyId, 'comments', parentCommentId);
+          const parentCommentDoc = await getDoc(parentCommentRef);
+          
+          if (parentCommentDoc.exists()) {
+            const parentComment = parentCommentDoc.data();
+            if (parentComment.userId !== userId && parentComment.userId !== story.authorId) {
+              await addDoc(collection(db, 'notifications'), {
+                userId: parentComment.userId,
+                type: 'reply',
+                fromUserId: userId,
+                storyId,
+                storyTitle: story.title,
+                commentId: commentRef.id,
+                parentCommentId,
+                createdAt: serverTimestamp(),
+                read: false
+              });
+            }
+          }
+        }
       }
 
-      return { id: commentRef.id };
+      return {
+        id: commentRef.id,
+        ...commentData,
+        createdAt: new Date() // Return current date for optimistic updates
+      };
     } catch (error) {
       console.error('Error adding comment:', error);
       throw error;
     }
   }
 
-  async getComments(storyId, limitCount = 50) {
+  async getComments(storyId, limitCount = 20, cursor = null, sortBy = 'newest') {
     try {
-      const q = query(
-        collection(db, 'comments'),
-        where('storyId', '==', storyId),
+      
+      // Simple query without complex indexes - get all comments and filter client-side
+      let q = query(
+        collection(db, 'stories', storyId, 'comments'),
         orderBy('createdAt', 'desc'),
-        limit(limitCount)
+        limit(limitCount * 2) // Get more to account for filtering
+      );
+
+      // Apply cursor for pagination
+      if (cursor) {
+        const cursorDoc = await getDoc(doc(db, 'stories', storyId, 'comments', cursor));
+        if (cursorDoc.exists()) {
+          q = query(q, startAfter(cursorDoc));
+        }
+      }
+
+      const snapshot = await getDocs(q);
+      let allComments = [];
+      
+      // Get all comments and filter client-side
+      for (const docSnap of snapshot.docs) {
+        const comment = { id: docSnap.id, ...docSnap.data() };
+        allComments.push(comment);
+      }
+
+      // Filter for top-level comments only (no parentCommentId)
+      const topLevelComments = allComments.filter(comment => !comment.parentCommentId);
+      
+      // Apply client-side sorting
+      switch (sortBy) {
+        case 'oldest':
+          topLevelComments.sort((a, b) => {
+            const aTime = a.createdAt?.toDate?.() || new Date(a.createdAt);
+            const bTime = b.createdAt?.toDate?.() || new Date(b.createdAt);
+            return aTime - bTime;
+          });
+          break;
+        case 'popular':
+          topLevelComments.sort((a, b) => {
+            const aScore = (a.likesCount || 0);
+            const bScore = (b.likesCount || 0);
+            if (aScore === bScore) {
+              const aTime = a.createdAt?.toDate?.() || new Date(a.createdAt);
+              const bTime = b.createdAt?.toDate?.() || new Date(b.createdAt);
+              return bTime - aTime;
+            }
+            return bScore - aScore;
+          });
+          break;
+        default: // newest
+          topLevelComments.sort((a, b) => {
+            const aTime = a.createdAt?.toDate?.() || new Date(a.createdAt);
+            const bTime = b.createdAt?.toDate?.() || new Date(b.createdAt);
+            return bTime - aTime;
+          });
+      }
+
+      // Limit to requested count
+      const comments = topLevelComments.slice(0, limitCount);
+      let nextCursor = null;
+      
+      // Set next cursor for pagination
+      if (comments.length === limitCount && topLevelComments.length > limitCount) {
+        nextCursor = comments[comments.length - 1].id;
+      }
+
+      const total = await this.getCommentsCount(storyId);
+
+      return {
+        comments,
+        nextCursor,
+        hasMore: comments.length === limitCount && topLevelComments.length > limitCount,
+        total
+      };
+    } catch (error) {
+      console.error('Error getting comments:', error);
+      return { comments: [], nextCursor: null, hasMore: false, total: 0 };
+    }
+  }
+
+  async getCommentReplies(storyId, parentCommentId, limitCount = 20) {
+    try {
+      // Get all comments and filter client-side to avoid index requirements
+      const q = query(
+        collection(db, 'stories', storyId, 'comments'),
+        orderBy('createdAt', 'asc'),
+        limit(100) // Get more comments to filter from
       );
 
       const snapshot = await getDocs(q);
-      const comments = [];
+      const allComments = [];
       
-      for (const docSnap of snapshot.docs) {
-        const comment = { id: docSnap.id, ...docSnap.data() };
-        
-        // Get user profile for comment author
-        try {
-          const userProfile = await this.getUserProfile(comment.userId);
-          comment.author = userProfile;
-        } catch (error) {
-          console.warn(`Failed to get profile for comment author ${comment.userId}:`, error);
-        }
-        
-        comments.push(comment);
+      snapshot.forEach(doc => {
+        allComments.push({ id: doc.id, ...doc.data() });
+      });
+
+      // Filter for replies to this specific comment
+      const replies = allComments
+        .filter(comment => comment.parentCommentId === parentCommentId)
+        .slice(0, limitCount);
+
+      return { replies };
+    } catch (error) {
+      console.error('Error getting comment replies:', error);
+      return { replies: [] };
+    }
+  }
+
+  async getCommentsCount(storyId) {
+    try {
+      const storyDoc = await getDoc(doc(db, 'stories', storyId));
+      if (storyDoc.exists()) {
+        return storyDoc.data().stats?.commentsCount || 0;
+      }
+      return 0;
+    } catch (error) {
+      console.error('Error getting comments count:', error);
+      return 0;
+    }
+  }
+
+  async updateComment(storyId, commentId, content, userId) {
+    try {
+      const commentRef = doc(db, 'stories', storyId, 'comments', commentId);
+      const commentDoc = await getDoc(commentRef);
+      
+      if (!commentDoc.exists()) {
+        throw new Error('Comment not found');
       }
 
-      return comments;
+      const comment = commentDoc.data();
+      if (comment.userId !== userId) {
+        throw new Error('Unauthorized to edit this comment');
+      }
+
+      await updateDoc(commentRef, {
+        content,
+        updatedAt: serverTimestamp(),
+        isEdited: true
+      });
+
+      return {
+        id: commentId,
+        ...comment,
+        content,
+        isEdited: true,
+        updatedAt: new Date()
+      };
     } catch (error) {
-      console.error('Error getting comments:', error);
-      return [];
+      console.error('Error updating comment:', error);
+      throw error;
+    }
+  }
+
+  async deleteComment(storyId, commentId, userId) {
+    try {
+      const batch = writeBatch(db);
+      const commentRef = doc(db, 'stories', storyId, 'comments', commentId);
+      const commentDoc = await getDoc(commentRef);
+      
+      if (!commentDoc.exists()) {
+        throw new Error('Comment not found');
+      }
+
+      const comment = commentDoc.data();
+      if (comment.userId !== userId) {
+        throw new Error('Unauthorized to delete this comment');
+      }
+
+      // Check if comment has replies
+      const repliesQuery = query(
+        collection(db, 'stories', storyId, 'comments'),
+        where('parentCommentId', '==', commentId),
+        limit(1)
+      );
+      const repliesSnapshot = await getDocs(repliesQuery);
+
+      if (repliesSnapshot.empty) {
+        // No replies, safe to delete completely
+        batch.delete(commentRef);
+        
+        // Update parent comment's reply count if this is a reply
+        if (comment.parentCommentId) {
+          const parentCommentRef = doc(db, 'stories', storyId, 'comments', comment.parentCommentId);
+          batch.update(parentCommentRef, {
+            repliesCount: increment(-1)
+          });
+        }
+      } else {
+        // Has replies, mark as deleted instead
+        batch.update(commentRef, {
+          content: '[deleted]',
+          isDeleted: true,
+          deletedAt: serverTimestamp()
+        });
+      }
+
+      // Update story comments count
+      const storyRef = doc(db, 'stories', storyId);
+      batch.update(storyRef, {
+        'stats.commentsCount': increment(-1)
+      });
+
+      await batch.commit();
+      return commentId;
+    } catch (error) {
+      console.error('Error deleting comment:', error);
+      throw error;
+    }
+  }
+
+  async toggleCommentLike(storyId, commentId, userId) {
+    try {
+      const batch = writeBatch(db);
+      const likeRef = doc(db, 'commentLikes', `${userId}_${commentId}`);
+      const likeDoc = await getDoc(likeRef);
+      const commentRef = doc(db, 'stories', storyId, 'comments', commentId);
+
+      if (likeDoc.exists()) {
+        // Unlike
+        batch.delete(likeRef);
+        batch.update(commentRef, {
+          likesCount: increment(-1)
+        });
+        await batch.commit();
+        return false;
+      } else {
+        // Like
+        batch.set(likeRef, {
+          userId,
+          commentId,
+          storyId,
+          createdAt: serverTimestamp()
+        });
+        batch.update(commentRef, {
+          likesCount: increment(1)
+        });
+        await batch.commit();
+        return true;
+      }
+    } catch (error) {
+      console.error('Error toggling comment like:', error);
+      throw error;
+    }
+  }
+
+  // Real-time listener for comments
+  subscribeToComments(storyId, callback) {
+    try {
+      // Use a simpler query to avoid complex index requirements
+      const q = query(
+        collection(db, 'stories', storyId, 'comments'),
+        orderBy('createdAt', 'desc'),
+        limit(5) // Only listen to top 5 newest comments for real-time updates
+      );
+
+      return onSnapshot(q, 
+        (snapshot) => {
+          try {
+            snapshot.docChanges().forEach((change) => {
+              if (change.type === 'added') {
+                const commentData = change.doc.data();
+                // Only process top-level comments (no parentCommentId)
+                if (!commentData.parentCommentId) {
+                  const newComment = { id: change.doc.id, ...commentData };
+                  callback(newComment);
+                }
+              }
+            });
+          } catch (error) {
+            console.error('Error processing comment changes:', error);
+          }
+        },
+        (error) => {
+          console.error('Comments listener error:', error);
+          // Return a no-op function to prevent further errors
+          return () => {};
+        }
+      );
+    } catch (error) {
+      console.error('Error setting up comments listener:', error);
+      // Return a no-op function to prevent crashes
+      return () => {};
     }
   }
 

@@ -17,6 +17,41 @@
   * {
     @apply border-neutral-200 dark:border-neutral-700;
   }
+
+  /* Custom Scrollbar */
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(163 163 163) transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background-color: rgb(163 163 163);
+    border-radius: 3px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    background-color: rgb(115 115 115);
+  }
+
+  .dark .scrollbar-thin {
+    scrollbar-color: rgb(82 82 82) transparent;
+  }
+
+  .dark .scrollbar-thin::-webkit-scrollbar-thumb {
+    background-color: rgb(82 82 82);
+  }
+
+  .dark .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    background-color: rgb(115 115 115);
+  }
 }
 
 @layer components {

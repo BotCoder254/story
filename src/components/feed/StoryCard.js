@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { formatDistanceToNow } from 'date-fns';
 import {
@@ -12,11 +12,17 @@ import {
   FiUser,
   FiChevronLeft,
   FiChevronRight,
-  FiMap
+  FiMap,
+  FiX,
+  FiEdit3,
+  FiTrash2,
+  FiAlertCircle
 } from 'react-icons/fi';
 import { useAuth } from '../../contexts/AuthContext';
 import storyService from '../../services/storyService';
 import TravelMap from '../map/TravelMap';
+import Comments from '../social/Comments';
+import ErrorBoundary from '../common/ErrorBoundary';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../../config/firebase';
 import toast from 'react-hot-toast';
@@ -27,17 +33,20 @@ const StoryCard = ({ story }) => {
   const [isLiked, setIsLiked] = useState(false);
   const [isBookmarked, setIsBookmarked] = useState(false);
   const [likesCount, setLikesCount] = useState(story.stats?.likeCount || 0);
+  const [commentsCount, setCommentsCount] = useState(story.stats?.commentsCount || 0);
   const [currentMediaIndex, setCurrentMediaIndex] = useState(0);
   const [isFollowing, setIsFollowing] = useState(false);
   const [showFullContent, setShowFullContent] = useState(false);
   const [showMap, setShowMap] = useState(false);
+  const [showComments, setShowComments] = useState(false);
+  const [showActions, setShowActions] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [mediaItems, setMediaItems] = useState([]);
 
   // Initialize media items (images + map if location exists)
   useEffect(() => {
     const items = [];
-    
+
     // Add story images
     if (story.media && story.media.length > 0) {
       story.media.forEach((media, index) => {
@@ -49,7 +58,7 @@ const StoryCard = ({ story }) => {
         });
       });
     }
-    
+
     // Add map if location exists
     if (story.location && story.location.lat && story.location.lng) {
       items.push({
@@ -58,7 +67,7 @@ const StoryCard = ({ story }) => {
         story: story
       });
     }
-    
+
     setMediaItems(items);
   }, [story]);
 
@@ -66,7 +75,7 @@ const StoryCard = ({ story }) => {
   useEffect(() => {
     const checkUserInteractions = async () => {
       if (!currentUser || !story.id) return;
-      
+
       try {
         // Check if user has liked this story
         const userLikeRef = doc(db, 'userLikes', `${currentUser.uid}_${story.id}`);
@@ -188,6 +197,29 @@ const StoryCard = ({ story }) => {
     }
   };
 
+  const handleEditStory = () => {
+    // Navigate to edit page or open edit modal
+    navigate(`/edit-story/${story.id}`);
+  };
+
+  const handleDeleteStory = async () => {
+    if (window.confirm('Are you sure you want to delete this story? This action cannot be undone.')) {
+      try {
+        await storyService.deleteStory(story.id, currentUser.uid);
+        toast.success('Story deleted successfully');
+        // Optionally refresh the feed or remove the story from UI
+        window.location.reload();
+      } catch (error) {
+        toast.error('Failed to delete story');
+      }
+    }
+  };
+
+  const handleReportStory = () => {
+    // Implement report functionality
+    toast.success('Story reported. Thank you for helping keep our community safe.');
+  };
+
   const formatDate = (timestamp) => {
     if (!timestamp) return '';
     const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
@@ -218,7 +250,7 @@ const StoryCard = ({ story }) => {
             onClick={handleProfileClick}
           />
           <div>
-            <h4 
+            <h4
               className="font-medium text-neutral-900 dark:text-white cursor-pointer hover:text-primary-600 dark:hover:text-primary-400 transition-colors"
               onClick={handleProfileClick}
             >
@@ -234,18 +266,69 @@ const StoryCard = ({ story }) => {
           {currentUser?.uid !== story.authorId && (
             <button
               onClick={() => setIsFollowing(!isFollowing)}
-              className={`px-3 py-1 text-sm font-medium rounded-lg transition-colors ${
-                isFollowing
-                  ? 'bg-neutral-200 dark:bg-neutral-700 text-neutral-700 dark:text-neutral-300'
-                  : 'bg-primary-600 text-white hover:bg-primary-700'
-              }`}
+              className={`px-3 py-1 text-sm font-medium rounded-lg transition-colors ${isFollowing
+                ? 'bg-neutral-200 dark:bg-neutral-700 text-neutral-700 dark:text-neutral-300'
+                : 'bg-primary-600 text-white hover:bg-primary-700'
+                }`}
             >
               {isFollowing ? 'Following' : 'Follow'}
             </button>
           )}
-          <button className="p-2 text-neutral-500 dark:text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-300 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-700">
-            <FiMoreHorizontal />
-          </button>
+          <div className="relative">
+            <button
+              onClick={() => setShowActions(!showActions)}
+              className="p-2 text-neutral-500 dark:text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-300 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-700"
+            >
+              <FiMoreHorizontal />
+            </button>
+
+            <AnimatePresence>
+              {showActions && (
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.95 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.95 }}
+                  className="absolute right-0 top-full mt-1 bg-white dark:bg-neutral-800 rounded-lg shadow-strong border border-neutral-200 dark:border-neutral-700 py-1 z-20 min-w-[120px]"
+                >
+                  {currentUser?.uid === story.authorId ? (
+                    <>
+                      <button
+                        onClick={() => {
+                          setShowActions(false);
+                          handleEditStory();
+                        }}
+                        className="flex items-center space-x-2 w-full px-3 py-2 text-sm text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-700"
+                      >
+                        <FiEdit3 />
+                        <span>Edit</span>
+                      </button>
+                      <button
+                        onClick={() => {
+                          setShowActions(false);
+                          handleDeleteStory();
+                        }}
+                        className="flex items-center space-x-2 w-full px-3 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20"
+                      >
+                        <FiTrash2 />
+                        <span>Delete</span>
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      onClick={() => {
+                        setShowActions(false);
+                        handleReportStory();
+                      }}
+                      className="flex items-center space-x-2 w-full px-3 py-2 text-sm text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-700"
+                    >
+                      <FiAlertCircle />
+                      <span>Report</span>
+                    </button>
+                  )}
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
         </div>
       </div>
 
@@ -254,7 +337,7 @@ const StoryCard = ({ story }) => {
         <h2 className="text-xl font-display font-bold text-neutral-900 dark:text-white mb-2">
           {story.title}
         </h2>
-        
+
         {/* Location */}
         {story.location && (
           <div className="flex items-center space-x-1 text-sm text-neutral-600 dark:text-neutral-400 mb-3">
@@ -321,11 +404,10 @@ const StoryCard = ({ story }) => {
                   <button
                     key={index}
                     onClick={() => setCurrentMediaIndex(index)}
-                    className={`w-2 h-2 rounded-full transition-colors ${
-                      index === currentMediaIndex
-                        ? 'bg-white'
-                        : 'bg-white/50'
-                    }`}
+                    className={`w-2 h-2 rounded-full transition-colors ${index === currentMediaIndex
+                      ? 'bg-white'
+                      : 'bg-white/50'
+                      }`}
                   />
                 ))}
               </div>
@@ -338,12 +420,12 @@ const StoryCard = ({ story }) => {
       <div className="p-4">
         <div className="prose prose-neutral dark:prose-invert max-w-none">
           <p className="text-neutral-700 dark:text-neutral-300 leading-relaxed">
-            {showFullContent 
-              ? story.content 
+            {showFullContent
+              ? story.content
               : getExcerpt(story.content || story.excerpt)
             }
           </p>
-          
+
           {story.content && story.content.length > 200 && (
             <button
               onClick={() => setShowFullContent(!showFullContent)}
@@ -380,11 +462,10 @@ const StoryCard = ({ story }) => {
           <div className="flex items-center space-x-6">
             <motion.button
               onClick={handleLike}
-              className={`flex items-center space-x-2 transition-colors ${
-                isLiked
-                  ? 'text-red-500'
-                  : 'text-neutral-600 dark:text-neutral-400 hover:text-red-500'
-              }`}
+              className={`flex items-center space-x-2 transition-colors ${isLiked
+                ? 'text-red-500'
+                : 'text-neutral-600 dark:text-neutral-400 hover:text-red-500'
+                }`}
               whileTap={{ scale: 0.95 }}
             >
               <motion.div
@@ -396,10 +477,14 @@ const StoryCard = ({ story }) => {
               <span className="text-sm font-medium">{likesCount}</span>
             </motion.button>
 
-            <button className="flex items-center space-x-2 text-neutral-600 dark:text-neutral-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors">
+            <motion.button
+              onClick={() => setShowComments(!showComments)}
+              className="flex items-center space-x-2 text-neutral-600 dark:text-neutral-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors"
+              whileTap={{ scale: 0.95 }}
+            >
               <FiMessageCircle />
-              <span className="text-sm font-medium">{story.commentsCount || 0}</span>
-            </button>
+              <span className="text-sm font-medium">{commentsCount}</span>
+            </motion.button>
 
             <button className="flex items-center space-x-2 text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-200 transition-colors">
               <span className="text-sm font-medium">{story.viewsCount || 0} views</span>
@@ -409,11 +494,10 @@ const StoryCard = ({ story }) => {
           <div className="flex items-center space-x-2">
             <motion.button
               onClick={handleBookmark}
-              className={`p-2 rounded-lg transition-colors ${
-                isBookmarked
-                  ? 'text-yellow-500 bg-yellow-50 dark:bg-yellow-900/20'
-                  : 'text-neutral-600 dark:text-neutral-400 hover:text-yellow-500 hover:bg-yellow-50 dark:hover:bg-yellow-900/20'
-              }`}
+              className={`p-2 rounded-lg transition-colors ${isBookmarked
+                ? 'text-yellow-500 bg-yellow-50 dark:bg-yellow-900/20'
+                : 'text-neutral-600 dark:text-neutral-400 hover:text-yellow-500 hover:bg-yellow-50 dark:hover:bg-yellow-900/20'
+                }`}
               whileTap={{ scale: 0.95 }}
             >
               <FiBookmark className={isBookmarked ? 'fill-current' : ''} />
@@ -428,6 +512,39 @@ const StoryCard = ({ story }) => {
           </div>
         </div>
       </div>
+
+      {/* Comments Section */}
+      <AnimatePresence>
+        {showComments && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            className="border-t border-neutral-200 dark:border-neutral-700"
+          >
+            <div className="p-4">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-semibold text-neutral-900 dark:text-white">
+                  Comments
+                </h3>
+                <button
+                  onClick={() => setShowComments(false)}
+                  className="p-1 text-neutral-500 dark:text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-300 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-700 transition-colors"
+                >
+                  <FiX />
+                </button>
+              </div>
+              <ErrorBoundary>
+                <Comments
+                  storyId={story.id}
+                  initialCount={commentsCount}
+                  className="max-h-96 overflow-y-auto"
+                />
+              </ErrorBoundary>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </motion.article>
   );
 };

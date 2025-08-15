@@ -379,7 +379,7 @@ class SearchService {
 
   // ==================== SUGGESTIONS & AUTOCOMPLETE ====================
 
-  async getSearchSuggestions(query, limit = 5) {
+  async getSearchSuggestions(query, limitCount = 5) {
     if (!query || query.length < 2) return [];
 
     const suggestions = new Set();
@@ -405,10 +405,10 @@ class SearchService {
       console.error('Location suggestions error:', error);
     }
 
-    return Array.from(suggestions).slice(0, limit);
+    return Array.from(suggestions).slice(0, limitCount);
   }
 
-  async getPopularTags(limit = 20) {
+  async getPopularTags(limitCount = 20) {
     try {
       // Use simple query to avoid composite index issues
       const q = query(
@@ -454,7 +454,7 @@ class SearchService {
 
       return Array.from(tagScores.entries())
         .sort((a, b) => b[1] - a[1])
-        .slice(0, limit)
+        .slice(0, limitCount)
         .map(([tag]) => tag);
     } catch (error) {
       console.error('Error getting popular tags:', error);
@@ -463,11 +463,11 @@ class SearchService {
         'travel', 'adventure', 'backpacking', 'foodie', 'photography',
         'nature', 'culture', 'solo', 'budget', 'luxury', 'beach', 'mountains',
         'city', 'roadtrip', 'hiking', 'sunset', 'wanderlust', 'explore'
-      ].slice(0, limit);
+      ].slice(0, limitCount);
     }
   }
 
-  async getLocationSuggestions(query, limit = 5) {
+  async getLocationSuggestions(query, limitCount = 5) {
     try {
       // Simple query without compound conditions
       const q = query(
@@ -475,7 +475,7 @@ class SearchService {
         where('location.name', '>=', query),
         where('location.name', '<=', query + '\uf8ff'),
         orderBy('location.name'),
-        limit(limit * 3) // Get more for client-side filtering
+        limit(limitCount * 3) // Get more for client-side filtering
       );
 
       const snapshot = await getDocs(q);
@@ -489,7 +489,7 @@ class SearchService {
         }
       });
 
-      return Array.from(locations).slice(0, limit);
+      return Array.from(locations).slice(0, limitCount);
     } catch (error) {
       console.error('Location suggestions error:', error);
       return [];
@@ -498,7 +498,7 @@ class SearchService {
 
   // ==================== TRENDING & DISCOVERY ====================
 
-  async getTrendingStories(timeframe = '7d', limit = 20) {
+  async getTrendingStories(timeframe = '7d', limitCount = 20) {
     try {
       const now = new Date();
       const timeframes = {
@@ -514,7 +514,7 @@ class SearchService {
       const q = query(
         collection(db, 'stories'),
         orderBy('createdAt', 'desc'),
-        limit(limit * 3) // Get more for client-side filtering
+        limit(limitCount * 3) // Get more for client-side filtering
       );
 
       const snapshot = await getDocs(q);
@@ -541,7 +541,7 @@ class SearchService {
           trendingScore: this.calculateTrendingScore(story, now)
         }))
         .sort((a, b) => b.trendingScore - a.trendingScore)
-        .slice(0, limit);
+        .slice(0, limitCount);
 
       return filteredStories;
     } catch (error) {
@@ -551,7 +551,7 @@ class SearchService {
         const fallbackQuery = query(
           collection(db, 'stories'),
           orderBy('createdAt', 'desc'),
-          limit(limit)
+          limit(limitCount)
         );
         
         const snapshot = await getDocs(fallbackQuery);
@@ -564,7 +564,7 @@ class SearchService {
           }
         });
 
-        return stories.slice(0, limit);
+        return stories.slice(0, limitCount);
       } catch (fallbackError) {
         console.error('Fallback trending query failed:', fallbackError);
         return [];
@@ -704,7 +704,7 @@ class SearchService {
     return null;
   }
 
-  async semanticSearch(query, limit = 10) {
+  async semanticSearch(query, limitCount = 10) {
     // Placeholder for semantic search
     console.log('Semantic search not implemented yet');
     return [];
