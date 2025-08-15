@@ -109,12 +109,11 @@ class SearchService {
       const queries = [];
       const searchTerms = searchQuery.toLowerCase().split(' ').filter(term => term.length > 0);
       
-      // Search in title
+      // Search in title - simplified to avoid compound queries
       for (const term of searchTerms) {
         queries.push(
           query(
             collection(db, 'stories'),
-            where('isDraft', '==', false),
             where('title', '>=', term),
             where('title', '<=', term + '\uf8ff'),
             orderBy('title'),
@@ -123,12 +122,11 @@ class SearchService {
         );
       }
 
-      // Search in author name
+      // Search in author name - simplified to avoid compound queries
       for (const term of searchTerms) {
         queries.push(
           query(
             collection(db, 'stories'),
-            where('isDraft', '==', false),
             where('authorName', '>=', term),
             where('authorName', '<=', term + '\uf8ff'),
             orderBy('authorName'),
@@ -145,7 +143,8 @@ class SearchService {
       results.forEach(snapshot => {
         snapshot.docs?.forEach(doc => {
           const story = { id: doc.id, ...doc.data() };
-          if (this.matchesFilters(story, filters)) {
+          // Client-side filtering for drafts and other filters
+          if (story.isDraft !== true && this.matchesFilters(story, filters)) {
             stories.set(doc.id, story);
           }
         });
@@ -193,12 +192,11 @@ class SearchService {
     try {
       const searchTags = searchQuery.toLowerCase().split(' ').map(tag => tag.replace('#', ''));
       
+      // Simple query without compound conditions to avoid index requirements
       const q = query(
         collection(db, 'stories'),
-        where('isDraft', '==', false),
         where('tags', 'array-contains-any', searchTags),
-        orderBy('createdAt', 'desc'),
-        limit(limitCount)
+        limit(limitCount * 2) // Get more for client-side filtering
       );
 
       const snapshot = await getDocs(q);
@@ -206,12 +204,20 @@ class SearchService {
       
       snapshot.forEach(doc => {
         const story = { id: doc.id, ...doc.data() };
-        if (this.matchesFilters(story, filters)) {
+        // Client-side filtering for drafts and other filters
+        if (story.isDraft !== true && this.matchesFilters(story, filters)) {
           stories.push(story);
         }
       });
 
-      return stories;
+      // Client-side sorting by createdAt
+      stories.sort((a, b) => {
+        const aTime = a.createdAt?.toMillis?.() || 0;
+        const bTime = b.createdAt?.toMillis?.() || 0;
+        return bTime - aTime;
+      });
+
+      return stories.slice(0, limitCount);
     } catch (error) {
       console.error('Tag search error:', error);
       return [];
@@ -220,55 +226,94 @@ class SearchService {
 
   async getFilteredStories(filters, sortBy, limitCount, offset) {
     try {
-      let q = collection(db, 'stories');
-      const conditions = [where('isDraft', '==', false)];
+      // Use simple query to avoid composite indexes
+      let q = query(
+        collection(db, 'stories'),
+        limit((limitCount + offset) * 2) // Get more for client-side filtering
+      );
 
-      // Apply filters
+      // Apply single filter if available to reduce data
       if (filters.authorId) {
-        conditions.push(where('authorId', '==', filters.authorId));
+        q = query(
+          collection(db, 'stories'),
+          where('authorId', '==', filters.authorId),
+          limit((limitCount + offset) * 2)
+        );
+      } else if (filters.tags && filters.tags.length > 0) {
+        q = query(
+          collection(db, 'stories'),
+          where('tags', 'array-contains-any', filters.tags),
+          limit((limitCount + offset) * 2)
+        );
       }
 
-      if (filters.tags && filters.tags.length > 0) {
-        conditions.push(where('tags', 'array-contains-any', filters.tags));
-      }
-
-      if (filters.location) {
-        conditions.push(where('location.name', '>=', filters.location));
-        conditions.push(where('location.name', '<=', filters.location + '\uf8ff'));
-      }
-
-      // Apply conditions
-      conditions.forEach(condition => {
-        q = query(q, condition);
+      const snapshot = await getDocs(q);
+      const allStories = [];
+      
+      snapshot.forEach(doc => {
+        const story = { id: doc.id, ...doc.data() };
+        allStories.push(story);
       });
 
-      // Apply sorting
+      // Client-side filtering
+      let filteredStories = allStories.filter(story => {
+        // Filter out drafts
+        if (story.isDraft === true) return false;
+        
+        // Apply all filters client-side
+        if (filters.authorId && story.authorId !== filters.authorId) return false;
+        
+        if (filters.tags && filters.tags.length > 0) {
+          const storyTags = story.tags || [];
+          const hasMatchingTag = filters.tags.some(filterTag =>
+            storyTags.some(storyTag => 
+              storyTag.toLowerCase().includes(filterTag.toLowerCase())
+            )
+          );
+          if (!hasMatchingTag) return false;
+        }
+        
+        if (filters.location) {
+          const locationName = story.location?.name || '';
+          if (!locationName.toLowerCase().includes(filters.location.toLowerCase())) {
+            return false;
+          }
+        }
+        
+        return this.matchesFilters(story, filters);
+      });
+
+      // Client-side sorting
       switch (sortBy) {
         case 'newest':
-          q = query(q, orderBy('createdAt', 'desc'));
+          filteredStories.sort((a, b) => {
+            const aTime = a.createdAt?.toMillis?.() || 0;
+            const bTime = b.createdAt?.toMillis?.() || 0;
+            return bTime - aTime;
+          });
           break;
         case 'oldest':
-          q = query(q, orderBy('createdAt', 'asc'));
+          filteredStories.sort((a, b) => {
+            const aTime = a.createdAt?.toMillis?.() || 0;
+            const bTime = b.createdAt?.toMillis?.() || 0;
+            return aTime - bTime;
+          });
           break;
         case 'popular':
-          q = query(q, orderBy('stats.likeCount', 'desc'));
+          filteredStories.sort((a, b) => (b.stats?.likeCount || 0) - (a.stats?.likeCount || 0));
           break;
         case 'trending':
-          q = query(q, orderBy('score', 'desc'));
+          filteredStories.sort((a, b) => (b.score || 0) - (a.score || 0));
           break;
         default:
-          q = query(q, orderBy('createdAt', 'desc'));
+          filteredStories.sort((a, b) => {
+            const aTime = a.createdAt?.toMillis?.() || 0;
+            const bTime = b.createdAt?.toMillis?.() || 0;
+            return bTime - aTime;
+          });
       }
 
-      q = query(q, limit(limitCount + offset));
-      const snapshot = await getDocs(q);
-      
-      const stories = [];
-      snapshot.forEach(doc => {
-        stories.push({ id: doc.id, ...doc.data() });
-      });
-
-      return stories.slice(offset);
+      return filteredStories.slice(offset, offset + limitCount);
     } catch (error) {
       console.error('Filtered search error:', error);
       return [];
@@ -365,44 +410,72 @@ class SearchService {
 
   async getPopularTags(limit = 20) {
     try {
+      // Use simple query to avoid composite index issues
       const q = query(
         collection(db, 'stories'),
-        where('isDraft', '==', false),
-        where('tags', '!=', []),
-        orderBy('tags'),
-        orderBy('stats.likeCount', 'desc'),
-        limit(100)
+        orderBy('createdAt', 'desc'),
+        limit(200) // Get more stories for better tag analysis
       );
 
       const snapshot = await getDocs(q);
       const tagCounts = new Map();
+      const tagEngagement = new Map();
 
       snapshot.forEach(doc => {
         const story = doc.data();
+        
+        // Skip drafts
+        if (story.isDraft === true) return;
+        
+        // Process tags
         (story.tags || []).forEach(tag => {
-          tagCounts.set(tag, (tagCounts.get(tag) || 0) + 1);
+          const cleanTag = tag.toLowerCase().trim();
+          if (cleanTag) {
+            // Count occurrences
+            tagCounts.set(cleanTag, (tagCounts.get(cleanTag) || 0) + 1);
+            
+            // Calculate engagement score for this tag
+            const engagement = (story.stats?.likeCount || 0) + 
+                             (story.stats?.commentsCount || 0) * 2 + 
+                             (story.stats?.bookmarksCount || 0) * 3;
+            
+            tagEngagement.set(cleanTag, (tagEngagement.get(cleanTag) || 0) + engagement);
+          }
         });
       });
 
-      return Array.from(tagCounts.entries())
+      // Calculate trending score for tags (frequency + engagement)
+      const tagScores = new Map();
+      tagCounts.forEach((count, tag) => {
+        const engagement = tagEngagement.get(tag) || 0;
+        const score = count * 2 + engagement; // Weight frequency and engagement
+        tagScores.set(tag, score);
+      });
+
+      return Array.from(tagScores.entries())
         .sort((a, b) => b[1] - a[1])
         .slice(0, limit)
         .map(([tag]) => tag);
     } catch (error) {
       console.error('Error getting popular tags:', error);
-      return [];
+      // Return some default popular tags as fallback
+      return [
+        'travel', 'adventure', 'backpacking', 'foodie', 'photography',
+        'nature', 'culture', 'solo', 'budget', 'luxury', 'beach', 'mountains',
+        'city', 'roadtrip', 'hiking', 'sunset', 'wanderlust', 'explore'
+      ].slice(0, limit);
     }
   }
 
   async getLocationSuggestions(query, limit = 5) {
     try {
+      // Simple query without compound conditions
       const q = query(
         collection(db, 'stories'),
-        where('isDraft', '==', false),
         where('location.name', '>=', query),
         where('location.name', '<=', query + '\uf8ff'),
         orderBy('location.name'),
-        limit(limit * 2)
+        limit(limit * 3) // Get more for client-side filtering
       );
 
       const snapshot = await getDocs(q);
@@ -410,7 +483,8 @@ class SearchService {
 
       snapshot.forEach(doc => {
         const story = doc.data();
-        if (story.location?.name) {
+        // Client-side filtering for drafts
+        if (story.isDraft !== true && story.location?.name) {
           locations.add(story.location.name);
         }
       });
@@ -436,67 +510,133 @@ class SearchService {
       const daysAgo = timeframes[timeframe] || 7;
       const startDate = new Date(now.getTime() - (daysAgo * 24 * 60 * 60 * 1000));
 
+      // Use simple query to avoid composite index issues
       const q = query(
         collection(db, 'stories'),
-        where('isDraft', '==', false),
-        where('createdAt', '>=', startDate),
-        orderBy('createdAt'),
-        orderBy('score', 'desc'),
-        limit(limit)
+        orderBy('createdAt', 'desc'),
+        limit(limit * 3) // Get more for client-side filtering
       );
 
       const snapshot = await getDocs(q);
-      const stories = [];
+      const allStories = [];
 
       snapshot.forEach(doc => {
-        stories.push({ id: doc.id, ...doc.data() });
+        const storyData = { id: doc.id, ...doc.data() };
+        allStories.push(storyData);
       });
 
-      return stories;
+      // Client-side filtering and sorting for trending
+      const filteredStories = allStories
+        .filter(story => {
+          // Filter out drafts
+          if (story.isDraft === true) return false;
+          
+          // Filter by timeframe
+          const storyDate = story.createdAt?.toDate?.() || new Date(story.createdAt);
+          return storyDate >= startDate;
+        })
+        .map(story => ({
+          ...story,
+          // Calculate trending score based on engagement and recency
+          trendingScore: this.calculateTrendingScore(story, now)
+        }))
+        .sort((a, b) => b.trendingScore - a.trendingScore)
+        .slice(0, limit);
+
+      return filteredStories;
     } catch (error) {
       console.error('Error getting trending stories:', error);
-      return [];
+      // Fallback to recent stories
+      try {
+        const fallbackQuery = query(
+          collection(db, 'stories'),
+          orderBy('createdAt', 'desc'),
+          limit(limit)
+        );
+        
+        const snapshot = await getDocs(fallbackQuery);
+        const stories = [];
+        
+        snapshot.forEach(doc => {
+          const storyData = { id: doc.id, ...doc.data() };
+          if (storyData.isDraft !== true) {
+            stories.push(storyData);
+          }
+        });
+
+        return stories.slice(0, limit);
+      } catch (fallbackError) {
+        console.error('Fallback trending query failed:', fallbackError);
+        return [];
+      }
     }
+  }
+
+  calculateTrendingScore(story, now) {
+    const storyDate = story.createdAt?.toDate?.() || new Date(story.createdAt);
+    const ageInHours = (now - storyDate) / (1000 * 60 * 60);
+    
+    // Base engagement score
+    const likes = story.stats?.likeCount || 0;
+    const comments = story.stats?.commentsCount || 0;
+    const views = story.stats?.viewsCount || 0;
+    const bookmarks = story.stats?.bookmarksCount || 0;
+    
+    const engagementScore = (likes * 3) + (comments * 2) + (bookmarks * 4) + (views * 0.1);
+    
+    // Time decay factor (newer stories get higher scores)
+    const timeDecay = Math.max(0.1, 1 - (ageInHours / (7 * 24))); // Decay over 7 days
+    
+    return engagementScore * timeDecay;
   }
 
   async getDiscoveryFeed(userId, preferences = {}) {
     try {
       // Get user's interaction history for personalization
       const userTags = preferences.tags || [];
-      const userLocations = preferences.locations || [];
 
-      let q = query(
-        collection(db, 'stories'),
-        where('isDraft', '==', false),
-        orderBy('score', 'desc'),
-        limit(50)
-      );
-
+      let q;
+      
       // If user has preferences, try to get personalized content
       if (userTags.length > 0) {
         q = query(
           collection(db, 'stories'),
-          where('isDraft', '==', false),
           where('tags', 'array-contains-any', userTags.slice(0, 10)),
-          orderBy('tags'),
-          orderBy('score', 'desc'),
-          limit(30)
+          limit(100) // Get more for client-side filtering
+        );
+      } else {
+        // Simple query without compound conditions
+        q = query(
+          collection(db, 'stories'),
+          limit(100)
         );
       }
 
       const snapshot = await getDocs(q);
-      const stories = [];
+      const allStories = [];
 
       snapshot.forEach(doc => {
         const story = { id: doc.id, ...doc.data() };
-        // Exclude user's own stories from discovery
-        if (story.authorId !== userId) {
-          stories.push(story);
-        }
+        allStories.push(story);
       });
 
-      // Shuffle for variety
-      return this.shuffleArray(stories).slice(0, 20);
+      // Client-side filtering and sorting
+      const filteredStories = allStories
+        .filter(story => {
+          // Filter out drafts
+          if (story.isDraft === true) return false;
+          // Exclude user's own stories from discovery
+          if (story.authorId === userId) return false;
+          return true;
+        })
+        .map(story => ({
+          ...story,
+          discoveryScore: (story.stats?.likeCount || 0) + (story.stats?.commentsCount || 0) * 2
+        }))
+        .sort((a, b) => b.discoveryScore - a.discoveryScore);
+
+      // Shuffle for variety and return top 20
+      return this.shuffleArray(filteredStories).slice(0, 20);
     } catch (error) {
       console.error('Error getting discovery feed:', error);
       return [];

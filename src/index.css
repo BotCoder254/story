@@ -79,6 +79,8 @@
   .custom-scrollbar {
     scrollbar-width: thin;
     scrollbar-color: theme('colors.neutral.400') theme('colors.neutral.100');
+    overflow-y: auto;
+    overflow-x: hidden;
   }
 
   .custom-scrollbar::-webkit-scrollbar {
@@ -95,6 +97,36 @@
 
   .custom-scrollbar::-webkit-scrollbar-thumb:hover {
     @apply bg-neutral-500 dark:bg-neutral-500;
+  }
+
+  /* Ensure proper scrolling behavior */
+  .scrollable-container {
+    height: 100%;
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Fix for modal scrolling */
+  .modal-content {
+    max-height: 90vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .modal-body {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+  }
+
+  /* Ensure form elements don't break layout */
+  .form-container {
+    min-height: 0;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
   }
 }
 
@@ -117,6 +149,21 @@
 
   .animation-delay-800 {
     animation-delay: 800ms;
+  }
+
+  /* Line clamp utilities */
+  .line-clamp-2 {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .line-clamp-3 {
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
   }
 }
 

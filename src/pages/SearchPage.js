@@ -29,8 +29,7 @@ const SearchPage = () => {
     data: searchData,
     isLoading,
     isError,
-    error,
-    refetch
+    error
   } = useQuery({
     queryKey: ['search', searchQuery, searchFilters, currentPage],
     queryFn: async () => {
@@ -62,13 +61,16 @@ const SearchPage = () => {
     }
   });
 
-  // Trending tags query
+  // Trending tags query with real-time updates
   const {
-    data: trendingTags = []
+    data: trendingTags = [],
+    refetch: refetchTags
   } = useQuery({
     queryKey: ['trendingTags'],
     queryFn: () => searchService.getPopularTags(20),
-    staleTime: 1000 * 60 * 30, // 30 minutes
+    staleTime: 1000 * 60 * 5, // 5 minutes for more frequent updates
+    refetchInterval: 1000 * 60 * 10, // Auto-refetch every 10 minutes
+    refetchOnWindowFocus: true,
   });
 
   // Discovery feed query (when no search)

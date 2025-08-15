@@ -26,9 +26,22 @@ class StoryService {
   // Create a new story
   async createStory(storyData, userId) {
     try {
+      // Clean the data to remove File objects and other non-serializable data
+      const cleanedMedia = (storyData.media || []).map(media => ({
+        url: media.url || '',
+        storagePath: media.storagePath || '',
+        fileName: media.fileName || '',
+        size: media.size || 0,
+        type: media.type || '',
+        uploadedAt: media.uploadedAt || new Date().toISOString()
+      })).filter(media => media.url); // Only include media with URLs
+
       const story = {
-        ...storyData,
+        title: storyData.title || '',
+        content: storyData.content || '',
         authorId: userId,
+        authorName: storyData.authorName || '',
+        authorAvatar: storyData.authorAvatar || '',
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
         publishedAt: storyData.isDraft ? null : serverTimestamp(),
@@ -43,13 +56,20 @@ class StoryService {
         score: 0, // For trending algorithm
         pinned: false,
         featured: false,
-        tags: storyData.tags || [],
-        location: storyData.location || null,
+        tags: Array.isArray(storyData.tags) ? storyData.tags : [],
+        location: storyData.location ? {
+          name: storyData.location.name || '',
+          lat: storyData.location.lat || null,
+          lng: storyData.location.lng || null,
+          address: storyData.location.address || ''
+        } : null,
         geohash: storyData.location?.lat && storyData.location?.lng 
           ? geolocationService.generateGeohash(storyData.location.lat, storyData.location.lng)
           : null,
-        media: storyData.media || [],
-        privacy: storyData.privacy || 'public' // public, followers, private
+        media: cleanedMedia,
+        privacy: storyData.privacy || 'public', // public, followers, private
+        mood: storyData.mood || '',
+        tripType: storyData.tripType || ''
       };
 
       const docRef = await addDoc(collection(db, 'stories'), story);
@@ -75,13 +95,36 @@ class StoryService {
         throw new Error('Unauthorized to update this story');
       }
 
+      // Clean the updates data to remove File objects
+      const cleanedMedia = (updates.media || []).map(media => ({
+        url: media.url || '',
+        storagePath: media.storagePath || '',
+        fileName: media.fileName || '',
+        size: media.size || 0,
+        type: media.type || '',
+        uploadedAt: media.uploadedAt || new Date().toISOString()
+      })).filter(media => media.url);
+
       const updateData = {
-        ...updates,
+        title: updates.title || story.title,
+        content: updates.content || story.content,
+        tags: Array.isArray(updates.tags) ? updates.tags : story.tags,
+        location: updates.location ? {
+          name: updates.location.name || '',
+          lat: updates.location.lat || null,
+          lng: updates.location.lng || null,
+          address: updates.location.address || ''
+        } : story.location,
+        media: updates.media ? cleanedMedia : story.media,
+        privacy: updates.privacy || story.privacy,
+        mood: updates.mood || story.mood,
+        tripType: updates.tripType || story.tripType,
+        isDraft: updates.hasOwnProperty('isDraft') ? updates.isDraft : story.isDraft,
         updatedAt: serverTimestamp()
       };
 
       // If publishing a draft
-      if (story.isDraft && !updates.isDraft) {
+      if (story.isDraft && !updateData.isDraft) {
         updateData.publishedAt = serverTimestamp();
       }
 
@@ -205,11 +248,23 @@ class StoryService {
 
       // Sort by order type (client-side)
       if (orderType === 'trending') {
-        filteredStories.sort((a, b) => (b.score || 0) - (a.score || 0));
+        // Calculate trending score for each story
+        const now = new Date();
+        filteredStories = filteredStories.map(story => ({
+          ...story,
+          trendingScore: this.calculateTrendingScore(story, now)
+        })).sort((a, b) => b.trendingScore - a.trendingScore);
       } else if (orderType === 'popular') {
         filteredStories.sort((a, b) => (b.stats?.likeCount || 0) - (a.stats?.likeCount || 0));
+      } else if (orderType === 'forYou') {
+        // Simple algorithm for "For You" - mix of recent and popular
+        filteredStories.sort((a, b) => {
+          const aScore = (a.stats?.likeCount || 0) + (a.stats?.commentsCount || 0) * 2;
+          const bScore = (b.stats?.likeCount || 0) + (b.stats?.commentsCount || 0) * 2;
+          return bScore - aScore;
+        });
       }
-      // 'latest' is already sorted by createdAt desc from the query
+      // 'latest' and 'nearby' are already sorted by createdAt desc from the query
 
       // Limit results
       const stories = filteredStories.slice(0, limitCount);
@@ -257,15 +312,14 @@ class StoryService {
     }
   }
 
-  // Get user's stories - simplified
+  // Get user's stories - simplified to avoid composite index
   async getUserStories(userId, includeDrafts = false) {
     try {
-      // Single field query to avoid composite index
+      // Simple query with only where clause to avoid composite index
       const q = query(
         collection(db, 'stories'),
         where('authorId', '==', userId),
-        orderBy('createdAt', 'desc'),
-        limit(100) // Get more for client-side filtering
+        limit(200) // Get more for client-side sorting and filtering
       );
 
       const snapshot = await getDocs(q);
@@ -280,10 +334,18 @@ class StoryService {
         }
       });
 
+      // Client-side sorting by createdAt
+      stories.sort((a, b) => {
+        const aTime = a.createdAt?.toMillis?.() || 0;
+        const bTime = b.createdAt?.toMillis?.() || 0;
+        return bTime - aTime; // Descending order (newest first)
+      });
+
       return stories;
     } catch (error) {
       console.error('Error getting user stories:', error);
-      throw error;
+      // Return empty array instead of throwing to prevent app crashes
+      return [];
     }
   }
 
@@ -446,83 +508,150 @@ class StoryService {
     }
   }
 
-  // Get user's liked stories
+  // Get user's liked stories - simplified to avoid index
   async getUserLikedStories(userId) {
     try {
+      // Simple query without orderBy to avoid composite index
       const q = query(
         collection(db, 'userLikes'),
         where('userId', '==', userId),
-        orderBy('createdAt', 'desc'),
-        limit(50)
+        limit(100)
       );
 
       const snapshot = await getDocs(q);
-      const storyIds = [];
+      const likes = [];
       
       snapshot.forEach(doc => {
-        storyIds.push(doc.data().storyId);
+        const data = doc.data();
+        likes.push({
+          storyId: data.storyId,
+          createdAt: data.createdAt
+        });
       });
 
-      if (storyIds.length === 0) return [];
+      if (likes.length === 0) return [];
+
+      // Sort client-side by createdAt
+      likes.sort((a, b) => {
+        const aTime = a.createdAt?.toMillis?.() || 0;
+        const bTime = b.createdAt?.toMillis?.() || 0;
+        return bTime - aTime;
+      });
 
       // Get the actual stories (in batches to avoid too many requests)
       const stories = [];
-      for (const storyId of storyIds) {
+      for (const like of likes.slice(0, 50)) {
         try {
-          const story = await this.getStory(storyId);
+          const story = await this.getStory(like.storyId);
           if (story && story.isDraft !== true) {
             stories.push(story);
           }
         } catch (error) {
           // Skip stories that no longer exist
-          console.warn(`Story ${storyId} not found:`, error);
+          console.warn(`Story ${like.storyId} not found:`, error);
         }
       }
       
       return stories;
     } catch (error) {
       console.error('Error getting user liked stories:', error);
-      throw error;
+      // Return empty array instead of throwing
+      return [];
     }
   }
 
-  // Get user's bookmarked stories
+  // Get user's bookmarked stories - simplified to avoid index
   async getUserBookmarkedStories(userId) {
     try {
+      // Simple query without orderBy to avoid composite index
       const q = query(
         collection(db, 'userBookmarks'),
         where('userId', '==', userId),
-        orderBy('createdAt', 'desc'),
-        limit(50)
+        limit(100)
       );
 
       const snapshot = await getDocs(q);
-      const storyIds = [];
+      const bookmarks = [];
       
       snapshot.forEach(doc => {
-        storyIds.push(doc.data().storyId);
+        const data = doc.data();
+        bookmarks.push({
+          storyId: data.storyId,
+          createdAt: data.createdAt
+        });
       });
 
-      if (storyIds.length === 0) return [];
+      if (bookmarks.length === 0) return [];
+
+      // Sort client-side by createdAt
+      bookmarks.sort((a, b) => {
+        const aTime = a.createdAt?.toMillis?.() || 0;
+        const bTime = b.createdAt?.toMillis?.() || 0;
+        return bTime - aTime;
+      });
 
       // Get the actual stories (in batches to avoid too many requests)
       const stories = [];
-      for (const storyId of storyIds) {
+      for (const bookmark of bookmarks.slice(0, 50)) {
         try {
-          const story = await this.getStory(storyId);
+          const story = await this.getStory(bookmark.storyId);
           if (story && story.isDraft !== true) {
             stories.push(story);
           }
         } catch (error) {
           // Skip stories that no longer exist
-          console.warn(`Story ${storyId} not found:`, error);
+          console.warn(`Story ${bookmark.storyId} not found:`, error);
         }
       }
       
       return stories;
     } catch (error) {
       console.error('Error getting user bookmarked stories:', error);
-      throw error;
+      // Return empty array instead of throwing
+      return [];
+    }
+  }
+
+  // Calculate trending score for a story
+  calculateTrendingScore(story, now) {
+    const storyDate = story.createdAt?.toDate?.() || new Date(story.createdAt);
+    const ageInHours = (now - storyDate) / (1000 * 60 * 60);
+    
+    // Base engagement score
+    const likes = story.stats?.likeCount || 0;
+    const comments = story.stats?.commentsCount || 0;
+    const views = story.stats?.viewsCount || 0;
+    const bookmarks = story.stats?.bookmarksCount || 0;
+    
+    const engagementScore = (likes * 3) + (comments * 2) + (bookmarks * 4) + (views * 0.1);
+    
+    // Time decay factor (newer stories get higher scores)
+    const timeDecay = Math.max(0.1, 1 - (ageInHours / (7 * 24))); // Decay over 7 days
+    
+    return engagementScore * timeDecay;
+  }
+
+  // Check if user has liked a story
+  async checkUserLike(storyId, userId) {
+    try {
+      const userLikeRef = doc(db, 'userLikes', `${userId}_${storyId}`);
+      const likeDoc = await getDoc(userLikeRef);
+      return likeDoc.exists();
+    } catch (error) {
+      console.error('Error checking user like:', error);
+      return false;
+    }
+  }
+
+  // Check if user has bookmarked a story
+  async checkUserBookmark(storyId, userId) {
+    try {
+      const userBookmarkRef = doc(db, 'userBookmarks', `${userId}_${storyId}`);
+      const bookmarkDoc = await getDoc(userBookmarkRef);
+      return bookmarkDoc.exists();
+    } catch (error) {
+      console.error('Error checking user bookmark:', error);
+      return false;
     }
   }
 

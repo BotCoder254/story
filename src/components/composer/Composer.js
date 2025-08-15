@@ -216,13 +216,15 @@ const Composer = ({ isOpen, onClose, editStory = null }) => {
         // Create preview
         const preview = URL.createObjectURL(file);
         
-        // Add to media files with preview
+        // Add to media files with preview (without File object)
         setMediaFiles(prev => [...prev, {
           id: fileId,
-          file,
           preview,
           uploading: true,
-          source
+          source,
+          fileName: file.name,
+          size: file.size,
+          type: file.type
         }]);
 
         // Upload to Firebase Storage
@@ -232,10 +234,20 @@ const Composer = ({ isOpen, onClose, editStory = null }) => {
           editStory?.id || 'temp'
         );
 
-        // Update media file with upload result
+        // Update media file with upload result (clean data)
         setMediaFiles(prev => prev.map(media => 
           media.id === fileId 
-            ? { ...media, ...uploadedMedia, uploading: false }
+            ? { 
+                id: fileId,
+                url: uploadedMedia.url,
+                storagePath: uploadedMedia.storagePath,
+                fileName: uploadedMedia.fileName,
+                size: uploadedMedia.size,
+                type: uploadedMedia.type,
+                uploadedAt: uploadedMedia.uploadedAt,
+                uploading: false,
+                source
+              }
             : media
         ));
 
@@ -385,9 +397,9 @@ const Composer = ({ isOpen, onClose, editStory = null }) => {
 
           <div className="flex h-[calc(90vh-80px)]">
             {/* Main Editor */}
-            <div className="flex-1 flex flex-col">
-              <form onSubmit={handleSubmit(onSubmit)} className="flex-1 flex flex-col">
-                <div className="flex-1 p-6 space-y-6 overflow-y-auto custom-scrollbar">
+            <div className="flex-1 flex flex-col min-h-0">
+              <form onSubmit={handleSubmit(onSubmit)} className="flex-1 flex flex-col min-h-0">
+                <div className="flex-1 p-6 space-y-6 overflow-y-auto custom-scrollbar min-h-0">
                   {/* Title */}
                   <div>
                     <div className="flex items-center justify-between mb-2">

@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { Link } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import {
   FiPlus,
   FiMap,
@@ -17,35 +18,274 @@ import {
   FiSave,
   FiSearch,
   FiHash,
-  FiActivity
+  FiActivity,
+  FiRefreshCw
 } from 'react-icons/fi';
 import { useAuth } from '../contexts/AuthContext';
 import ThemeToggle from '../components/common/ThemeToggle';
 import Feed from '../components/feed/Feed';
 import Composer from '../components/composer/Composer';
+import searchService from '../services/searchService';
+import storyService from '../services/storyService';
+
+// Discover Tab Component
+const DiscoverTab = ({ userId }) => {
+  const { data: discoveryStories, isLoading } = useQuery({
+    queryKey: ['discovery', userId],
+    queryFn: () => searchService.getDiscoveryFeed(userId),
+    enabled: !!userId,
+    staleTime: 1000 * 60 * 10, // 10 minutes
+    refetchInterval: 1000 * 60 * 15, // Auto-refresh every 15 minutes
+  });
+
+  if (isLoading) {
+    return (
+      <div className="space-y-4">
+        {Array.from({ length: 3 }).map((_, index) => (
+          <div key={index} className="card animate-pulse">
+            <div className="h-32 bg-neutral-200 dark:bg-neutral-700 rounded mb-4"></div>
+            <div className="h-4 bg-neutral-200 dark:bg-neutral-700 rounded mb-2"></div>
+            <div className="h-3 bg-neutral-200 dark:bg-neutral-700 rounded w-3/4"></div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  if (!discoveryStories || discoveryStories.length === 0) {
+    return (
+      <div className="text-center py-12">
+        <FiSearch className="text-4xl text-neutral-400 mx-auto mb-4" />
+        <h3 className="text-lg font-semibold text-neutral-900 dark:text-white mb-2">
+          Discover New Stories
+        </h3>
+        <p className="text-neutral-600 dark:text-neutral-400">
+          Explore stories from around the world
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center space-x-2 mb-4">
+        <FiCompass className="text-primary-600 dark:text-primary-400" />
+        <h3 className="text-lg font-semibold text-neutral-900 dark:text-white">
+          Discover Stories
+        </h3>
+      </div>
+
+      <div className="space-y-4">
+        {discoveryStories.map((story) => (
+          <motion.div
+            key={story.id}
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="card card-hover"
+          >
+            {story.media && story.media[0] && (
+              <img
+                src={story.media[0].url}
+                alt={story.title}
+                className="w-full h-48 rounded-lg object-cover mb-4"
+              />
+            )}
+            <div className="space-y-3">
+              <h4 className="font-semibold text-neutral-900 dark:text-white">
+                {story.title}
+              </h4>
+              <p className="text-sm text-neutral-600 dark:text-neutral-400 line-clamp-3">
+                {story.content}
+              </p>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2">
+                  <img
+                    src={story.authorAvatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(story.authorName || 'User')}&background=0ea5e9&color=fff&size=32`}
+                    alt={story.authorName}
+                    className="w-6 h-6 rounded-full"
+                  />
+                  <span className="text-sm text-neutral-600 dark:text-neutral-400">
+                    {story.authorName}
+                  </span>
+                </div>
+                <div className="flex items-center space-x-4 text-sm text-neutral-500 dark:text-neutral-400">
+                  <span className="flex items-center space-x-1">
+                    <FiHeart />
+                    <span>{story.stats?.likeCount || 0}</span>
+                  </span>
+                  <span className="flex items-center space-x-1">
+                    <FiMessageCircle />
+                    <span>{story.stats?.commentsCount || 0}</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+// Saved Stories Tab Component
+const SavedStoriesTab = ({ userId }) => {
+  const { data: savedStories, isLoading, refetch } = useQuery({
+    queryKey: ['savedStories', userId],
+    queryFn: () => storyService.getUserBookmarkedStories(userId),
+    enabled: !!userId,
+    staleTime: 1000 * 60 * 2, // 2 minutes for more frequent updates
+    refetchOnWindowFocus: true,
+    refetchInterval: 1000 * 60 * 5, // Auto-refresh every 5 minutes
+  });
+
+  // Add refresh button for manual updates
+  const handleRefresh = () => {
+    refetch();
+  };
+
+  if (isLoading) {
+    return (
+      <div className="space-y-4">
+        {Array.from({ length: 3 }).map((_, index) => (
+          <div key={index} className="card animate-pulse">
+            <div className="h-4 bg-neutral-200 dark:bg-neutral-700 rounded mb-2"></div>
+            <div className="h-3 bg-neutral-200 dark:bg-neutral-700 rounded w-3/4"></div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  if (!savedStories || savedStories.length === 0) {
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="text-lg font-semibold text-neutral-900 dark:text-white">
+            Saved Stories
+          </h3>
+          <button
+            onClick={handleRefresh}
+            className="p-2 text-neutral-600 dark:text-neutral-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors"
+          >
+            <FiRefreshCw className={isLoading ? 'animate-spin' : ''} />
+          </button>
+        </div>
+        <div className="text-center py-12">
+          <FiBookmark className="text-4xl text-neutral-400 mx-auto mb-4" />
+          <h3 className="text-lg font-semibold text-neutral-900 dark:text-white mb-2">
+            Your Saved Stories
+          </h3>
+          <p className="text-neutral-600 dark:text-neutral-400">
+            Stories you've bookmarked will appear here
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h3 className="text-lg font-semibold text-neutral-900 dark:text-white">
+          Saved Stories ({savedStories.length})
+        </h3>
+        <button
+          onClick={handleRefresh}
+          className="p-2 text-neutral-600 dark:text-neutral-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors"
+        >
+          <FiRefreshCw className={isLoading ? 'animate-spin' : ''} />
+        </button>
+      </div>
+      {savedStories.map((story) => (
+        <motion.div
+          key={story.id}
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="card card-hover"
+        >
+          <div className="flex items-start space-x-3">
+            {story.media && story.media[0] && (
+              <img
+                src={story.media[0].url}
+                alt={story.title}
+                className="w-16 h-16 rounded-lg object-cover"
+              />
+            )}
+            <div className="flex-1 min-w-0">
+              <h4 className="font-semibold text-neutral-900 dark:text-white mb-1 truncate">
+                {story.title}
+              </h4>
+              <p className="text-sm text-neutral-600 dark:text-neutral-400 mb-2 line-clamp-2">
+                {story.content}
+              </p>
+              <div className="flex items-center space-x-4 text-xs text-neutral-500 dark:text-neutral-400">
+                <span>By {story.authorName}</span>
+                <span>{story.stats?.likeCount || 0} likes</span>
+              </div>
+            </div>
+          </div>
+        </motion.div>
+      ))}
+    </div>
+  );
+};
 
 const DashboardPage = () => {
   const { currentUser, userProfile, logout } = useAuth();
   const [showComposer, setShowComposer] = useState(false);
   const [activeLeftTab, setActiveLeftTab] = useState('feed');
   const [activeRightTab, setActiveRightTab] = useState('map');
+  const [userStats, setUserStats] = useState({
+    stories: 0,
+    followers: 0,
+    likes: 0,
+    countries: 0
+  });
+
+  // Fetch user stats
+  const { data: userStoriesData } = useQuery({
+    queryKey: ['userStories', currentUser?.uid],
+    queryFn: () => storyService.getUserStories(currentUser?.uid, true),
+    enabled: !!currentUser?.uid,
+    staleTime: 1000 * 60 * 5, // 5 minutes
+  });
+
+  // Fetch trending tags
+  const { data: trendingTags = [] } = useQuery({
+    queryKey: ['trendingTags'],
+    queryFn: () => searchService.getPopularTags(6),
+    staleTime: 1000 * 60 * 10, // 10 minutes
+    refetchInterval: 1000 * 60 * 15, // Auto-refresh every 15 minutes
+  });
+
+  // Calculate user stats from stories
+  useEffect(() => {
+    if (userStoriesData) {
+      const publishedStories = userStoriesData.filter(story => !story.isDraft);
+      const totalLikes = publishedStories.reduce((sum, story) => sum + (story.stats?.likeCount || 0), 0);
+      const uniqueCountries = new Set(
+        publishedStories
+          .map(story => story.location?.name)
+          .filter(Boolean)
+      ).size;
+
+      setUserStats({
+        stories: publishedStories.length,
+        followers: Math.floor(Math.random() * 2000) + 500, // Mock data for now
+        likes: totalLikes,
+        countries: uniqueCountries
+      });
+    }
+  }, [userStoriesData]);
 
   const stats = [
-    { label: 'Stories', value: '12', icon: FiBookmark, color: 'text-primary-600' },
-    { label: 'Followers', value: '1.2K', icon: FiUsers, color: 'text-secondary-600' },
-    { label: 'Likes', value: '3.4K', icon: FiHeart, color: 'text-red-500' },
-    { label: 'Countries', value: '8', icon: FiGlobe, color: 'text-accent-600' }
+    { label: 'Stories', value: userStats.stories.toString(), icon: FiBookmark, color: 'text-primary-600' },
+    { label: 'Followers', value: userStats.followers > 1000 ? `${(userStats.followers / 1000).toFixed(1)}K` : userStats.followers.toString(), icon: FiUsers, color: 'text-secondary-600' },
+    { label: 'Likes', value: userStats.likes > 1000 ? `${(userStats.likes / 1000).toFixed(1)}K` : userStats.likes.toString(), icon: FiHeart, color: 'text-red-500' },
+    { label: 'Countries', value: userStats.countries.toString(), icon: FiGlobe, color: 'text-accent-600' }
   ];
 
-  const trendingTags = [
-    { tag: 'backpacking', count: 1234 },
-    { tag: 'foodie', count: 987 },
-    { tag: 'adventure', count: 756 },
-    { tag: 'photography', count: 543 },
-    { tag: 'culture', count: 432 },
-    { tag: 'nature', count: 321 }
-  ];
-
+  // Mock recent activity (in a real app, this would come from a notifications service)
   const recentActivity = [
     { user: 'Sarah Chen', action: 'liked your story', story: 'Sunrise Over Santorini', time: '2m ago', avatar: 'https://images.unsplash.com/photo-1494790108755-2616b612b786?w=40&h=40&fit=crop&crop=face' },
     { user: 'Marco Silva', action: 'commented on', story: 'Lost in Tokyo Streets', time: '5m ago', avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=40&h=40&fit=crop&crop=face' },
@@ -72,7 +312,7 @@ const DashboardPage = () => {
       <header className="sticky top-0 z-40 bg-white dark:bg-neutral-800 border-b border-neutral-200 dark:border-neutral-700">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
-            <Link 
+            <Link
               to="/dashboard"
               className="flex items-center space-x-2 hover:opacity-80 transition-opacity"
             >
@@ -154,11 +394,10 @@ const DashboardPage = () => {
                   <button
                     key={item.id}
                     onClick={() => setActiveLeftTab(item.id)}
-                    className={`w-full flex items-center space-x-3 px-3 py-2 rounded-lg transition-colors ${
-                      activeLeftTab === item.id
-                        ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300'
-                        : 'text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-700'
-                    }`}
+                    className={`w-full flex items-center space-x-3 px-3 py-2 rounded-lg transition-colors ${activeLeftTab === item.id
+                      ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300'
+                      : 'text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-700'
+                      }`}
                   >
                     <item.icon className="text-lg" />
                     <span className="font-medium">{item.label}</span>
@@ -200,33 +439,13 @@ const DashboardPage = () => {
 
             {/* Feed Content */}
             {activeLeftTab === 'feed' && <Feed />}
-            
+
             {activeLeftTab === 'discover' && (
-              <div className="space-y-6">
-                <div className="text-center py-12">
-                  <FiSearch className="text-4xl text-neutral-400 mx-auto mb-4" />
-                  <h3 className="text-lg font-semibold text-neutral-900 dark:text-white mb-2">
-                    Discover New Stories
-                  </h3>
-                  <p className="text-neutral-600 dark:text-neutral-400">
-                    Explore stories from around the world
-                  </p>
-                </div>
-              </div>
+              <DiscoverTab userId={currentUser?.uid} />
             )}
 
             {activeLeftTab === 'saved' && (
-              <div className="space-y-6">
-                <div className="text-center py-12">
-                  <FiBookmark className="text-4xl text-neutral-400 mx-auto mb-4" />
-                  <h3 className="text-lg font-semibold text-neutral-900 dark:text-white mb-2">
-                    Your Saved Stories
-                  </h3>
-                  <p className="text-neutral-600 dark:text-neutral-400">
-                    Stories you've bookmarked for later
-                  </p>
-                </div>
-              </div>
+              <SavedStoriesTab userId={currentUser?.uid} />
             )}
 
             {activeLeftTab === 'profile' && (
@@ -276,11 +495,10 @@ const DashboardPage = () => {
                   <button
                     key={item.id}
                     onClick={() => setActiveRightTab(item.id)}
-                    className={`flex items-center justify-center lg:justify-start space-x-2 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-200 flex-1 lg:flex-none ${
-                      activeRightTab === item.id
-                        ? 'bg-white dark:bg-neutral-700 text-primary-600 dark:text-primary-400 shadow-sm'
-                        : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-200'
-                    }`}
+                    className={`flex items-center justify-center lg:justify-start space-x-2 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-200 flex-1 lg:flex-none ${activeRightTab === item.id
+                      ? 'bg-white dark:bg-neutral-700 text-primary-600 dark:text-primary-400 shadow-sm'
+                      : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-200'
+                      }`}
                   >
                     <Icon className="text-lg" />
                     <span className="hidden lg:inline">{item.label}</span>
@@ -310,7 +528,7 @@ const DashboardPage = () => {
                   Trending Tags
                 </h3>
                 <div className="space-y-3">
-                  {trendingTags.map((item, index) => (
+                  {trendingTags.map((tag, index) => (
                     <motion.div
                       key={index}
                       initial={{ opacity: 0, x: 20 }}
@@ -321,14 +539,20 @@ const DashboardPage = () => {
                       <div className="flex items-center space-x-2">
                         <FiHash className="text-primary-600 dark:text-primary-400" />
                         <span className="font-medium text-neutral-900 dark:text-white">
-                          {item.tag}
+                          {tag}
                         </span>
                       </div>
                       <span className="text-sm text-neutral-500 dark:text-neutral-400">
-                        {item.count}
+                        #{index + 1}
                       </span>
                     </motion.div>
                   ))}
+                  {trendingTags.length === 0 && (
+                    <div className="text-center py-4 text-neutral-500 dark:text-neutral-400">
+                      <FiHash className="text-2xl mx-auto mb-2" />
+                      <p className="text-sm">No trending tags yet</p>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -382,11 +606,10 @@ const DashboardPage = () => {
             <button
               key={item.id}
               onClick={() => setActiveLeftTab(item.id)}
-              className={`flex flex-col items-center space-y-1 p-2 rounded-lg transition-colors ${
-                activeLeftTab === item.id
-                  ? 'text-primary-600 dark:text-primary-400'
-                  : 'text-neutral-600 dark:text-neutral-400'
-              }`}
+              className={`flex flex-col items-center space-y-1 p-2 rounded-lg transition-colors ${activeLeftTab === item.id
+                ? 'text-primary-600 dark:text-primary-400'
+                : 'text-neutral-600 dark:text-neutral-400'
+                }`}
             >
               <item.icon className="text-lg" />
               <span className="text-xs font-medium">{item.label}</span>

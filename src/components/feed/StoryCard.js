@@ -14,21 +14,44 @@ import {
 } from 'react-icons/fi';
 import { useAuth } from '../../contexts/AuthContext';
 import storyService from '../../services/storyService';
+import { doc, getDoc } from 'firebase/firestore';
+import { db } from '../../config/firebase';
 import toast from 'react-hot-toast';
 
 const StoryCard = ({ story }) => {
   const { currentUser } = useAuth();
   const [isLiked, setIsLiked] = useState(false);
   const [isBookmarked, setIsBookmarked] = useState(false);
-  const [likesCount, setLikesCount] = useState(story.likesCount || 0);
+  const [likesCount, setLikesCount] = useState(story.stats?.likeCount || 0);
   const [currentMediaIndex, setCurrentMediaIndex] = useState(0);
   const [isFollowing, setIsFollowing] = useState(false);
   const [showFullContent, setShowFullContent] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
 
   // Check if user has liked/bookmarked this story
   useEffect(() => {
-    // This would typically be fetched from the backend
-    // For now, we'll use local state
+    const checkUserInteractions = async () => {
+      if (!currentUser || !story.id) return;
+      
+      try {
+        // Check if user has liked this story
+        const userLikeRef = doc(db, 'userLikes', `${currentUser.uid}_${story.id}`);
+        const likeDoc = await getDoc(userLikeRef);
+        setIsLiked(likeDoc.exists());
+
+        // Check if user has bookmarked this story
+        const userBookmarkRef = doc(db, 'userBookmarks', `${currentUser.uid}_${story.id}`);
+        const bookmarkDoc = await getDoc(userBookmarkRef);
+        setIsBookmarked(bookmarkDoc.exists());
+      } catch (error) {
+        console.error('Error checking user interactions:', error);
+        // Set default values on error
+        setIsLiked(false);
+        setIsBookmarked(false);
+      }
+    };
+
+    checkUserInteractions();
   }, [story.id, currentUser]);
 
   const handleLike = async () => {
@@ -37,12 +60,28 @@ const StoryCard = ({ story }) => {
       return;
     }
 
+    if (isLoading) return; // Prevent multiple clicks
+
+    setIsLoading(true);
+    const previousLikedState = isLiked;
+    const previousLikesCount = likesCount;
+
+    // Optimistic update
+    setIsLiked(!isLiked);
+    setLikesCount(prev => !isLiked ? prev + 1 : prev - 1);
+
     try {
       const newLikedState = await storyService.toggleLike(story.id, currentUser.uid);
+      // Update with actual result from server
       setIsLiked(newLikedState);
-      setLikesCount(prev => newLikedState ? prev + 1 : prev - 1);
+      setLikesCount(story.stats?.likeCount || (newLikedState ? likesCount + 1 : likesCount - 1));
     } catch (error) {
+      // Revert optimistic update on error
+      setIsLiked(previousLikedState);
+      setLikesCount(previousLikesCount);
       toast.error('Failed to update like');
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -52,12 +91,24 @@ const StoryCard = ({ story }) => {
       return;
     }
 
+    if (isLoading) return; // Prevent multiple clicks
+
+    setIsLoading(true);
+    const previousBookmarkedState = isBookmarked;
+
+    // Optimistic update
+    setIsBookmarked(!isBookmarked);
+
     try {
       const newBookmarkedState = await storyService.toggleBookmark(story.id, currentUser.uid);
       setIsBookmarked(newBookmarkedState);
       toast.success(newBookmarkedState ? 'Story bookmarked' : 'Bookmark removed');
     } catch (error) {
+      // Revert optimistic update on error
+      setIsBookmarked(previousBookmarkedState);
       toast.error('Failed to update bookmark');
+    } finally {
+      setIsLoading(false);
     }
   };
 

@@ -8,11 +8,14 @@ import {
   FiHeart,
   FiMapPin,
   FiUsers,
-  FiRefreshCw
+  FiRefreshCw,
+  FiSearch,
+  FiX
 } from 'react-icons/fi';
 import StoryCard from './StoryCard';
 import StoryCardSkeleton from './StoryCardSkeleton';
 import storyService from '../../services/storyService';
+import searchService from '../../services/searchService';
 import { useAuth } from '../../contexts/AuthContext';
 
 const Feed = () => {
@@ -20,6 +23,8 @@ const Feed = () => {
   const [feedType, setFeedType] = useState('latest');
   const [realTimeStories, setRealTimeStories] = useState([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [showSearch, setShowSearch] = useState(false);
 
   const feedTypes = [
     { id: 'latest', label: 'Latest', icon: FiClock },
@@ -39,8 +44,42 @@ const Feed = () => {
     isError,
     refetch
   } = useInfiniteQuery({
-    queryKey: ['stories', feedType],
+    queryKey: ['stories', feedType, searchQuery],
     queryFn: async ({ pageParam = null }) => {
+      // If there's a search query, use search service
+      if (searchQuery.trim()) {
+        const searchResults = await searchService.searchStories(searchQuery, {
+          limitCount: 10,
+          offset: pageParam || 0
+        });
+        return {
+          stories: searchResults.stories || [],
+          lastDoc: (pageParam || 0) + 10,
+          hasMore: searchResults.hasMore || false
+        };
+      }
+
+      if (feedType === 'trending') {
+        // Use search service for trending to get better algorithm
+        try {
+          const trendingStories = await searchService.getTrendingStories('7d', 10);
+          return {
+            stories: trendingStories || [],
+            lastDoc: null,
+            hasMore: false
+          };
+        } catch (error) {
+          console.error('Error fetching trending stories:', error);
+          // Fallback to regular stories
+          return await storyService.getStories({
+            orderType: 'latest',
+            lastDoc: pageParam,
+            limitCount: 10,
+            userId: currentUser?.uid
+          });
+        }
+      }
+
       return await storyService.getStories({
         orderType: feedType,
         lastDoc: pageParam,
@@ -51,8 +90,9 @@ const Feed = () => {
     getNextPageParam: (lastPage) => {
       return lastPage.hasMore ? lastPage.lastDoc : undefined;
     },
-    staleTime: 1000 * 60 * 5, // 5 minutes
+    staleTime: feedType === 'trending' ? 1000 * 60 * 2 : 1000 * 60 * 5, // Shorter cache for trending
     cacheTime: 1000 * 60 * 30, // 30 minutes
+    refetchInterval: feedType === 'trending' ? 1000 * 60 * 5 : undefined, // Auto-refresh trending every 5 minutes
   });
 
   // Real-time listener for top stories
@@ -61,10 +101,13 @@ const Feed = () => {
 
     const unsubscribe = storyService.subscribeToStories(
       (stories) => {
-        setRealTimeStories(stories.slice(0, 5)); // Top 5 for real-time updates
+        // Only update if we have stories and avoid clearing existing data
+        if (stories && stories.length > 0) {
+          setRealTimeStories(stories.slice(0, 5)); // Top 5 for real-time updates
+        }
       },
       {
-        orderType: feedType,
+        orderType: feedType === 'trending' ? 'latest' : feedType, // Use latest for trending to avoid issues
         limitCount: 5
       }
     );
@@ -74,21 +117,34 @@ const Feed = () => {
 
   // Merge real-time stories with paginated data
   const allStories = React.useMemo(() => {
-    if (!data?.pages) return [];
-    
-    const paginatedStories = data.pages.flatMap(page => page.stories);
-    
+    if (!data?.pages) return realTimeStories;
+
+    const paginatedStories = data.pages.flatMap(page => page.stories || []);
+
+    // For trending, use paginated data directly to avoid conflicts
+    if (feedType === 'trending') {
+      return paginatedStories;
+    }
+
     // Merge real-time updates with paginated data, avoiding duplicates
-    const mergedStories = [...realTimeStories];
-    
+    const storyMap = new Map();
+
+    // Add paginated stories first
     paginatedStories.forEach(story => {
-      if (!mergedStories.find(s => s.id === story.id)) {
-        mergedStories.push(story);
+      if (story && story.id) {
+        storyMap.set(story.id, story);
       }
     });
 
-    return mergedStories;
-  }, [data, realTimeStories]);
+    // Update with real-time data (newer versions)
+    realTimeStories.forEach(story => {
+      if (story && story.id) {
+        storyMap.set(story.id, story);
+      }
+    });
+
+    return Array.from(storyMap.values());
+  }, [data, realTimeStories, feedType]);
 
   // Virtualization setup
   const parentRef = React.useRef();
@@ -102,10 +158,10 @@ const Feed = () => {
   // Infinite scroll handler
   const handleScroll = useCallback(() => {
     if (!parentRef.current) return;
-    
+
     const { scrollTop, scrollHeight, clientHeight } = parentRef.current;
     const scrollPercentage = (scrollTop + clientHeight) / scrollHeight;
-    
+
     if (scrollPercentage > 0.8 && hasNextPage && !isFetchingNextPage) {
       fetchNextPage();
     }
@@ -122,8 +178,14 @@ const Feed = () => {
   // Refresh handler
   const handleRefresh = async () => {
     setIsRefreshing(true);
-    await refetch();
-    setIsRefreshing(false);
+    try {
+      await refetch();
+    } catch (error) {
+      console.error('Error refreshing feed:', error);
+      // Don't clear existing stories on error
+    } finally {
+      setIsRefreshing(false);
+    }
   };
 
   if (isLoading) {
@@ -154,6 +216,35 @@ const Feed = () => {
 
   return (
     <div className="space-y-6">
+      {/* Search Bar */}
+      <div className="relative">
+        <div className="flex items-center space-x-2">
+          <div className="relative flex-1">
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search stories, places, or tags..."
+              className="w-full pl-10 pr-4 py-3 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all duration-200"
+            />
+            <FiSearch className="absolute left-3 top-1/2 transform -translate-y-1/2 text-neutral-400" />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                className="absolute right-3 top-1/2 transform -translate-y-1/2 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300"
+              >
+                <FiX />
+              </button>
+            )}
+          </div>
+        </div>
+        {searchQuery && (
+          <div className="mt-2 text-sm text-neutral-600 dark:text-neutral-400">
+            Searching for: <span className="font-medium">"{searchQuery}"</span>
+          </div>
+        )}
+      </div>
+
       {/* Feed Type Selector */}
       <div className="flex items-center justify-between">
         <div className="flex items-center space-x-1 bg-neutral-100 dark:bg-neutral-800 rounded-xl p-1">
@@ -163,11 +254,10 @@ const Feed = () => {
               <button
                 key={type.id}
                 onClick={() => setFeedType(type.id)}
-                className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
-                  feedType === type.id
-                    ? 'bg-white dark:bg-neutral-700 text-primary-600 dark:text-primary-400 shadow-sm'
-                    : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-200'
-                }`}
+                className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${feedType === type.id
+                  ? 'bg-white dark:bg-neutral-700 text-primary-600 dark:text-primary-400 shadow-sm'
+                  : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-200'
+                  }`}
               >
                 <Icon className="text-sm" />
                 <span className="hidden sm:inline">{type.label}</span>
