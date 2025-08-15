@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
+import { useNavigate } from 'react-router-dom';
 import { formatDistanceToNow } from 'date-fns';
 import {
   FiHeart,
@@ -10,23 +11,56 @@ import {
   FiMoreHorizontal,
   FiUser,
   FiChevronLeft,
-  FiChevronRight
+  FiChevronRight,
+  FiMap
 } from 'react-icons/fi';
 import { useAuth } from '../../contexts/AuthContext';
 import storyService from '../../services/storyService';
+import TravelMap from '../map/TravelMap';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../../config/firebase';
 import toast from 'react-hot-toast';
 
 const StoryCard = ({ story }) => {
   const { currentUser } = useAuth();
+  const navigate = useNavigate();
   const [isLiked, setIsLiked] = useState(false);
   const [isBookmarked, setIsBookmarked] = useState(false);
   const [likesCount, setLikesCount] = useState(story.stats?.likeCount || 0);
   const [currentMediaIndex, setCurrentMediaIndex] = useState(0);
   const [isFollowing, setIsFollowing] = useState(false);
   const [showFullContent, setShowFullContent] = useState(false);
+  const [showMap, setShowMap] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [mediaItems, setMediaItems] = useState([]);
+
+  // Initialize media items (images + map if location exists)
+  useEffect(() => {
+    const items = [];
+    
+    // Add story images
+    if (story.media && story.media.length > 0) {
+      story.media.forEach((media, index) => {
+        items.push({
+          type: 'image',
+          url: media.url,
+          alt: story.title,
+          index
+        });
+      });
+    }
+    
+    // Add map if location exists
+    if (story.location && story.location.lat && story.location.lng) {
+      items.push({
+        type: 'map',
+        location: story.location,
+        story: story
+      });
+    }
+    
+    setMediaItems(items);
+  }, [story]);
 
   // Check if user has liked/bookmarked this story
   useEffect(() => {
@@ -136,14 +170,21 @@ const StoryCard = ({ story }) => {
   };
 
   const nextMedia = () => {
-    if (story.media && story.media.length > 1) {
-      setCurrentMediaIndex((prev) => (prev + 1) % story.media.length);
+    if (mediaItems.length > 1) {
+      setCurrentMediaIndex((prev) => (prev + 1) % mediaItems.length);
     }
   };
 
   const prevMedia = () => {
-    if (story.media && story.media.length > 1) {
-      setCurrentMediaIndex((prev) => (prev - 1 + story.media.length) % story.media.length);
+    if (mediaItems.length > 1) {
+      setCurrentMediaIndex((prev) => (prev - 1 + mediaItems.length) % mediaItems.length);
+    }
+  };
+
+  const handleProfileClick = (e) => {
+    e.stopPropagation();
+    if (story.authorId) {
+      navigate(`/profile/${story.authorId}`);
     }
   };
 
@@ -162,6 +203,7 @@ const StoryCard = ({ story }) => {
   return (
     <motion.article
       layout
+      data-story-id={story.id}
       className="card card-hover bg-white dark:bg-neutral-800 overflow-hidden"
       whileHover={{ y: -2 }}
       transition={{ duration: 0.2 }}
@@ -172,10 +214,14 @@ const StoryCard = ({ story }) => {
           <img
             src={story.authorAvatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(story.authorName || 'User')}&background=0ea5e9&color=fff`}
             alt={story.authorName}
-            className="w-10 h-10 rounded-full object-cover"
+            className="w-10 h-10 rounded-full object-cover cursor-pointer hover:ring-2 hover:ring-primary-500 transition-all"
+            onClick={handleProfileClick}
           />
           <div>
-            <h4 className="font-medium text-neutral-900 dark:text-white">
+            <h4 
+              className="font-medium text-neutral-900 dark:text-white cursor-pointer hover:text-primary-600 dark:hover:text-primary-400 transition-colors"
+              onClick={handleProfileClick}
+            >
               {story.authorName || 'Anonymous'}
             </h4>
             <p className="text-sm text-neutral-500 dark:text-neutral-400">
@@ -219,36 +265,59 @@ const StoryCard = ({ story }) => {
       </div>
 
       {/* Media Carousel */}
-      {story.media && story.media.length > 0 && (
+      {mediaItems.length > 0 && (
         <div className="relative">
           <div className="aspect-video bg-neutral-100 dark:bg-neutral-700 overflow-hidden">
-            <img
-              src={story.media[currentMediaIndex]?.url}
-              alt={story.title}
-              className="w-full h-full object-cover"
-              loading="lazy"
-            />
+            {mediaItems[currentMediaIndex]?.type === 'image' ? (
+              <img
+                src={mediaItems[currentMediaIndex].url}
+                alt={mediaItems[currentMediaIndex].alt}
+                className="w-full h-full object-cover"
+                loading="lazy"
+              />
+            ) : mediaItems[currentMediaIndex]?.type === 'map' ? (
+              <div className="w-full h-full">
+                <TravelMap
+                  stories={[story]}
+                  userLocation={null}
+                  height="100%"
+                  showControls={false}
+                  interactive={true}
+                  className="w-full h-full"
+                />
+              </div>
+            ) : null}
+          </div>
+
+          {/* Media Type Indicator */}
+          <div className="absolute top-2 left-2">
+            {mediaItems[currentMediaIndex]?.type === 'map' && (
+              <div className="bg-black/50 text-white px-2 py-1 rounded-lg text-xs flex items-center space-x-1">
+                <FiMap />
+                <span>Map</span>
+              </div>
+            )}
           </div>
 
           {/* Media Navigation */}
-          {story.media.length > 1 && (
+          {mediaItems.length > 1 && (
             <>
               <button
                 onClick={prevMedia}
-                className="absolute left-2 top-1/2 -translate-y-1/2 w-8 h-8 bg-black/50 text-white rounded-full flex items-center justify-center hover:bg-black/70 transition-colors"
+                className="absolute left-2 top-1/2 -translate-y-1/2 w-8 h-8 bg-black/50 text-white rounded-full flex items-center justify-center hover:bg-black/70 transition-colors z-10"
               >
                 <FiChevronLeft />
               </button>
               <button
                 onClick={nextMedia}
-                className="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 bg-black/50 text-white rounded-full flex items-center justify-center hover:bg-black/70 transition-colors"
+                className="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 bg-black/50 text-white rounded-full flex items-center justify-center hover:bg-black/70 transition-colors z-10"
               >
                 <FiChevronRight />
               </button>
 
               {/* Media Indicators */}
               <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex space-x-1">
-                {story.media.map((_, index) => (
+                {mediaItems.map((item, index) => (
                   <button
                     key={index}
                     onClick={() => setCurrentMediaIndex(index)}

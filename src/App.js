@@ -12,6 +12,7 @@ import SignupPage from './pages/auth/SignupPage';
 import ForgotPasswordPage from './pages/auth/ForgotPasswordPage';
 import DashboardPage from './pages/DashboardPage';
 import SearchPage from './pages/SearchPage';
+import UserProfilePage from './pages/UserProfilePage';
 
 // Create a client
 const queryClient = new QueryClient({
@@ -115,6 +116,14 @@ function App() {
                   element={
                     <ProtectedRoute>
                       <SearchPage />
+                    </ProtectedRoute>
+                  } 
+                />
+                <Route 
+                  path="/profile/:userId" 
+                  element={
+                    <ProtectedRoute>
+                      <UserProfilePage />
                     </ProtectedRoute>
                   } 
                 />

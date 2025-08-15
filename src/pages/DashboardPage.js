@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
   FiPlus,
@@ -19,14 +19,17 @@ import {
   FiSearch,
   FiHash,
   FiActivity,
-  FiRefreshCw
+  FiRefreshCw,
+  FiMapPin
 } from 'react-icons/fi';
 import { useAuth } from '../contexts/AuthContext';
 import ThemeToggle from '../components/common/ThemeToggle';
 import Feed from '../components/feed/Feed';
 import Composer from '../components/composer/Composer';
+import TravelMap from '../components/map/TravelMap';
 import searchService from '../services/searchService';
 import storyService from '../services/storyService';
+import socialService from '../services/socialService';
 
 // Discover Tab Component
 const DiscoverTab = ({ userId }) => {
@@ -231,7 +234,8 @@ const SavedStoriesTab = ({ userId }) => {
 };
 
 const DashboardPage = () => {
-  const { currentUser, userProfile, logout } = useAuth();
+  const { currentUser, logout } = useAuth();
+  const navigate = useNavigate();
   const [showComposer, setShowComposer] = useState(false);
   const [activeLeftTab, setActiveLeftTab] = useState('feed');
   const [activeRightTab, setActiveRightTab] = useState('map');
@@ -240,6 +244,15 @@ const DashboardPage = () => {
     followers: 0,
     likes: 0,
     countries: 0
+  });
+  const [recentActivity, setRecentActivity] = useState([]);
+
+  // Fetch user profile
+  const { data: userProfile } = useQuery({
+    queryKey: ['userProfile', currentUser?.uid],
+    queryFn: () => socialService.getUserProfile(currentUser?.uid),
+    enabled: !!currentUser?.uid,
+    staleTime: 1000 * 60 * 5, // 5 minutes
   });
 
   // Fetch user stats
@@ -257,6 +270,20 @@ const DashboardPage = () => {
     staleTime: 1000 * 60 * 10, // 10 minutes
     refetchInterval: 1000 * 60 * 15, // Auto-refresh every 15 minutes
   });
+
+  // Set up real-time activity listener
+  useEffect(() => {
+    if (!currentUser?.uid) return;
+
+    const unsubscribe = socialService.subscribeToActivity(
+      currentUser.uid,
+      (activities) => {
+        setRecentActivity(activities.slice(0, 10)); // Keep latest 10 activities
+      }
+    );
+
+    return () => unsubscribe && unsubscribe();
+  }, [currentUser]);
 
   // Calculate user stats from stories
   useEffect(() => {
@@ -285,13 +312,7 @@ const DashboardPage = () => {
     { label: 'Countries', value: userStats.countries.toString(), icon: FiGlobe, color: 'text-accent-600' }
   ];
 
-  // Mock recent activity (in a real app, this would come from a notifications service)
-  const recentActivity = [
-    { user: 'Sarah Chen', action: 'liked your story', story: 'Sunrise Over Santorini', time: '2m ago', avatar: 'https://images.unsplash.com/photo-1494790108755-2616b612b786?w=40&h=40&fit=crop&crop=face' },
-    { user: 'Marco Silva', action: 'commented on', story: 'Lost in Tokyo Streets', time: '5m ago', avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=40&h=40&fit=crop&crop=face' },
-    { user: 'Aisha Patel', action: 'started following you', time: '1h ago', avatar: 'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=40&h=40&fit=crop&crop=face' },
-    { user: 'David Kim', action: 'bookmarked your story', story: 'Sahara Desert Dreams', time: '2h ago', avatar: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=40&h=40&fit=crop&crop=face' }
-  ];
+
 
   const leftNavItems = [
     { id: 'feed', label: 'Feed', icon: FiCompass },
@@ -328,12 +349,12 @@ const DashboardPage = () => {
               <ThemeToggle />
               <div className="flex items-center space-x-3">
                 <img
-                  src={currentUser?.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(currentUser?.displayName || 'User')}&background=0ea5e9&color=fff`}
+                  src={userProfile?.photoURL || currentUser?.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(userProfile?.displayName || currentUser?.displayName || 'User')}&background=0ea5e9&color=fff`}
                   alt="Profile"
                   className="w-8 h-8 rounded-full"
                 />
                 <span className="hidden sm:inline text-sm font-medium text-neutral-700 dark:text-neutral-300">
-                  {currentUser?.displayName || 'User'}
+                  {userProfile?.displayName || currentUser?.displayName || 'User'}
                 </span>
               </div>
               <button
@@ -355,16 +376,22 @@ const DashboardPage = () => {
             <div className="card">
               <div className="text-center mb-6">
                 <img
-                  src={currentUser?.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(currentUser?.displayName || 'User')}&background=0ea5e9&color=fff&size=128`}
+                  src={userProfile?.photoURL || currentUser?.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(userProfile?.displayName || currentUser?.displayName || 'User')}&background=0ea5e9&color=fff&size=128`}
                   alt="Profile"
                   className="w-20 h-20 rounded-full mx-auto mb-4"
                 />
                 <h3 className="text-lg font-semibold text-neutral-900 dark:text-white">
-                  {currentUser?.displayName || 'User'}
+                  {userProfile?.displayName || currentUser?.displayName || 'User'}
                 </h3>
                 <p className="text-sm text-neutral-600 dark:text-neutral-400">
-                  Travel Storyteller
+                  {userProfile?.bio || 'Travel Storyteller'}
                 </p>
+                {userProfile?.location && (
+                  <div className="flex items-center justify-center space-x-1 text-xs text-neutral-500 dark:text-neutral-400 mt-1">
+                    <FiMapPin />
+                    <span>{userProfile.location}</span>
+                  </div>
+                )}
               </div>
 
               {/* Stats */}
@@ -461,7 +488,7 @@ const DashboardPage = () => {
                       </label>
                       <input
                         type="text"
-                        defaultValue={currentUser?.displayName || ''}
+                        defaultValue={userProfile?.displayName || currentUser?.displayName || ''}
                         className="input-field"
                         placeholder="Enter your display name"
                       />
@@ -472,8 +499,31 @@ const DashboardPage = () => {
                       </label>
                       <textarea
                         rows={3}
+                        defaultValue={userProfile?.bio || ''}
                         className="input-field"
                         placeholder="Tell us about yourself..."
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">
+                        Location
+                      </label>
+                      <input
+                        type="text"
+                        defaultValue={userProfile?.location || ''}
+                        className="input-field"
+                        placeholder="Where are you based?"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">
+                        Website
+                      </label>
+                      <input
+                        type="url"
+                        defaultValue={userProfile?.website || ''}
+                        className="input-field"
+                        placeholder="Your website or blog"
                       />
                     </div>
                     <button className="btn-primary">
@@ -513,12 +563,12 @@ const DashboardPage = () => {
                 <h3 className="text-lg font-semibold text-neutral-900 dark:text-white mb-4">
                   Travel Map
                 </h3>
-                <div className="h-64 bg-neutral-100 dark:bg-neutral-700 rounded-lg flex items-center justify-center">
-                  <div className="text-center text-neutral-500 dark:text-neutral-400">
-                    <FiMap className="text-3xl mx-auto mb-2" />
-                    <p className="text-sm">Interactive map coming soon!</p>
-                  </div>
-                </div>
+                <TravelMap
+                  stories={userStoriesData?.filter(story => story.location && !story.isDraft) || []}
+                  height="300px"
+                  showControls={true}
+                  interactive={true}
+                />
               </div>
             )}
 
@@ -563,35 +613,52 @@ const DashboardPage = () => {
                   Recent Activity
                 </h3>
                 <div className="space-y-4">
-                  {recentActivity.map((activity, index) => (
-                    <motion.div
-                      key={index}
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ delay: index * 0.1 }}
-                      className="flex items-start space-x-3"
-                    >
-                      <img
-                        src={activity.avatar}
-                        alt={activity.user}
-                        className="w-8 h-8 rounded-full"
-                      />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm text-neutral-900 dark:text-white">
-                          <span className="font-medium">{activity.user}</span>{' '}
-                          <span className="text-neutral-600 dark:text-neutral-400">
-                            {activity.action}
-                          </span>
-                          {activity.story && (
-                            <span className="font-medium"> "{activity.story}"</span>
-                          )}
-                        </p>
-                        <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-1">
-                          {activity.time}
-                        </p>
-                      </div>
-                    </motion.div>
-                  ))}
+                  {recentActivity.length > 0 ? (
+                    recentActivity.map((activity, index) => (
+                      <motion.div
+                        key={activity.id || index}
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ delay: index * 0.1 }}
+                        className={`flex items-start space-x-3 p-2 rounded-lg transition-colors ${!activity.read ? 'bg-primary-50 dark:bg-primary-900/20' : ''
+                          }`}
+                      >
+                        <img
+                          src={activity.userAvatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(activity.user || 'User')}&background=0ea5e9&color=fff&size=32`}
+                          alt={activity.user}
+                          className="w-8 h-8 rounded-full cursor-pointer"
+                          onClick={() => activity.userId && navigate(`/profile/${activity.userId}`)}
+                        />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm text-neutral-900 dark:text-white">
+                            <span
+                              className="font-medium cursor-pointer hover:text-primary-600 dark:hover:text-primary-400"
+                              onClick={() => activity.userId && navigate(`/profile/${activity.userId}`)}
+                            >
+                              {activity.user}
+                            </span>{' '}
+                            <span className="text-neutral-600 dark:text-neutral-400">
+                              {activity.action}
+                            </span>
+                            {activity.story && (
+                              <span className="font-medium"> "{activity.story}"</span>
+                            )}
+                          </p>
+                          <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-1">
+                            {activity.time}
+                          </p>
+                        </div>
+                        {!activity.read && (
+                          <div className="w-2 h-2 bg-primary-600 rounded-full mt-2"></div>
+                        )}
+                      </motion.div>
+                    ))
+                  ) : (
+                    <div className="text-center py-8 text-neutral-500 dark:text-neutral-400">
+                      <FiActivity className="text-3xl mx-auto mb-2" />
+                      <p className="text-sm">No recent activity</p>
+                    </div>
+                  )}
                 </div>
               </div>
             )}

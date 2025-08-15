@@ -11,6 +11,7 @@ import {
 } from 'react-icons/fi';
 import StoryCard from '../feed/StoryCard';
 import StoryCardSkeleton from '../feed/StoryCardSkeleton';
+import TravelMap from './TravelMap';
 import geolocationService from '../../services/geolocationService';
 import storyService from '../../services/storyService';
 import { useAuth } from '../../contexts/AuthContext';
@@ -300,6 +301,22 @@ const NearbyStories = ({ className = '' }) => {
           >
             Try Again
           </button>
+        </div>
+      )}
+
+      {/* Map View */}
+      {nearbyStories.length > 0 && userLocation && (
+        <div className="card mb-6">
+          <h3 className="text-lg font-semibold text-neutral-900 dark:text-white mb-4">
+            Stories on Map
+          </h3>
+          <TravelMap
+            stories={nearbyStories}
+            userLocation={userLocation}
+            height="400px"
+            showControls={true}
+            interactive={true}
+          />
         </div>
       )}
 

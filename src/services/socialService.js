@@ -10,300 +10,106 @@ import {
   where,
   orderBy,
   limit,
-  startAfter,
   onSnapshot,
-  increment,
-  arrayUnion,
-  arrayRemove,
   serverTimestamp,
   writeBatch,
-  runTransaction
+  increment
 } from 'firebase/firestore';
 import { db } from '../config/firebase';
 
 class SocialService {
-  // ==================== LIKES/VOTES ====================
-  
-  async toggleLike(storyId, userId) {
-    try {
-      return await runTransaction(db, async (transaction) => {
-        const storyRef = doc(db, 'stories', storyId);
-        const voteRef = doc(db, 'stories', storyId, 'votes', userId);
-        
-        const storyDoc = await transaction.get(storyRef);
-        const voteDoc = await transaction.get(voteRef);
-        
-        if (!storyDoc.exists()) {
-          throw new Error('Story not found');
-        }
-        
-        const isLiked = voteDoc.exists();
-        const currentLikes = storyDoc.data().stats?.likeCount || 0;
-        
-        if (isLiked) {
-          // Remove like
-          transaction.delete(voteRef);
-          transaction.update(storyRef, {
-            'stats.likeCount': Math.max(0, currentLikes - 1),
-            'stats.lastActivity': serverTimestamp()
-          });
-          return false;
-        } else {
-          // Add like
-          transaction.set(voteRef, {
-            userId,
-            storyId,
-            createdAt: serverTimestamp()
-          });
-          transaction.update(storyRef, {
-            'stats.likeCount': currentLikes + 1,
-            'stats.lastActivity': serverTimestamp()
-          });
-          return true;
-        }
-      });
-    } catch (error) {
-      console.error('Error toggling like:', error);
-      throw error;
-    }
-  }
+  // ==================== USER PROFILES ====================
 
-  async getUserLikedStories(userId, limitCount = 20) {
+  async getUserProfile(userId) {
     try {
-      const votesQuery = query(
-        collection(db, 'stories'),
-        where('votes.' + userId, '!=', null),
-        orderBy('createdAt', 'desc'),
-        limit(limitCount)
-      );
-      
-      const snapshot = await getDocs(votesQuery);
-      return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-    } catch (error) {
-      console.error('Error getting user liked stories:', error);
-      throw error;
-    }
-  }
-
-  async checkIfUserLiked(storyId, userId) {
-    try {
-      const voteDoc = await getDoc(doc(db, 'stories', storyId, 'votes', userId));
-      return voteDoc.exists();
-    } catch (error) {
-      console.error('Error checking if user liked:', error);
-      return false;
-    }
-  }
-
-  // ==================== COMMENTS ====================
-  
-  async addComment(storyId, userId, content, parentCommentId = null) {
-    try {
-      return await runTransaction(db, async (transaction) => {
-        const storyRef = doc(db, 'stories', storyId);
-        const commentsRef = collection(db, 'stories', storyId, 'comments');
-        
-        const storyDoc = await transaction.get(storyRef);
-        if (!storyDoc.exists()) {
-          throw new Error('Story not found');
-        }
-        
-        const commentData = {
-          userId,
-          content,
-          parentCommentId,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-          likesCount: 0,
-          repliesCount: 0,
-          isEdited: false
-        };
-        
-        const commentRef = doc(commentsRef);
-        transaction.set(commentRef, commentData);
-        
-        // Update story comment count
-        const currentComments = storyDoc.data().stats?.commentsCount || 0;
-        transaction.update(storyRef, {
-          'stats.commentsCount': currentComments + 1,
-          'stats.lastActivity': serverTimestamp()
-        });
-        
-        // If it's a reply, update parent comment reply count
-        if (parentCommentId) {
-          const parentRef = doc(db, 'stories', storyId, 'comments', parentCommentId);
-          const parentDoc = await transaction.get(parentRef);
-          if (parentDoc.exists()) {
-            const currentReplies = parentDoc.data().repliesCount || 0;
-            transaction.update(parentRef, {
-              repliesCount: currentReplies + 1
-            });
-          }
-        }
-        
-        return { id: commentRef.id, ...commentData };
-      });
-    } catch (error) {
-      console.error('Error adding comment:', error);
-      throw error;
-    }
-  }
-
-  async getComments(storyId, limitCount = 20, lastDoc = null, parentCommentId = null) {
-    try {
-      let commentsQuery = query(
-        collection(db, 'stories', storyId, 'comments'),
-        where('parentCommentId', '==', parentCommentId),
-        orderBy('createdAt', 'desc'),
-        limit(limitCount)
-      );
-      
-      if (lastDoc) {
-        commentsQuery = query(commentsQuery, startAfter(lastDoc));
+      const userDoc = await getDoc(doc(db, 'users', userId));
+      if (userDoc.exists()) {
+        return { id: userDoc.id, ...userDoc.data() };
       }
-      
-      const snapshot = await getDocs(commentsQuery);
-      const comments = [];
-      
-      snapshot.forEach(doc => {
-        comments.push({ id: doc.id, ...doc.data() });
-      });
-      
-      return {
-        comments,
-        lastDoc: snapshot.docs[snapshot.docs.length - 1] || null,
-        hasMore: snapshot.docs.length === limitCount
-      };
+      return null;
     } catch (error) {
-      console.error('Error getting comments:', error);
+      console.error('Error getting user profile:', error);
       throw error;
     }
   }
 
-  async updateComment(storyId, commentId, content, userId) {
+  async updateUserProfile(userId, profileData) {
     try {
-      const commentRef = doc(db, 'stories', storyId, 'comments', commentId);
-      const commentDoc = await getDoc(commentRef);
-      
-      if (!commentDoc.exists()) {
-        throw new Error('Comment not found');
-      }
-      
-      if (commentDoc.data().userId !== userId) {
-        throw new Error('Unauthorized to edit this comment');
-      }
-      
-      await updateDoc(commentRef, {
-        content,
-        updatedAt: serverTimestamp(),
-        isEdited: true
+      const userRef = doc(db, 'users', userId);
+      await updateDoc(userRef, {
+        ...profileData,
+        updatedAt: serverTimestamp()
       });
-      
       return true;
     } catch (error) {
-      console.error('Error updating comment:', error);
+      console.error('Error updating user profile:', error);
       throw error;
     }
   }
 
-  async deleteComment(storyId, commentId, userId) {
+  async createUserProfile(userId, profileData) {
     try {
-      return await runTransaction(db, async (transaction) => {
-        const storyRef = doc(db, 'stories', storyId);
-        const commentRef = doc(db, 'stories', storyId, 'comments', commentId);
-        
-        const storyDoc = await transaction.get(storyRef);
-        const commentDoc = await transaction.get(commentRef);
-        
-        if (!commentDoc.exists()) {
-          throw new Error('Comment not found');
+      const userRef = doc(db, 'users', userId);
+      await updateDoc(userRef, {
+        ...profileData,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        stats: {
+          followersCount: 0,
+          followingCount: 0,
+          storiesCount: 0,
+          likesReceived: 0
         }
-        
-        if (commentDoc.data().userId !== userId) {
-          throw new Error('Unauthorized to delete this comment');
-        }
-        
-        transaction.delete(commentRef);
-        
-        // Update story comment count
-        if (storyDoc.exists()) {
-          const currentComments = storyDoc.data().stats?.commentsCount || 0;
-          transaction.update(storyRef, {
-            'stats.commentsCount': Math.max(0, currentComments - 1)
-          });
-        }
-        
-        return true;
       });
+      return true;
     } catch (error) {
-      console.error('Error deleting comment:', error);
+      console.error('Error creating user profile:', error);
       throw error;
     }
   }
 
-  subscribeToComments(storyId, callback, parentCommentId = null) {
-    const commentsQuery = query(
-      collection(db, 'stories', storyId, 'comments'),
-      where('parentCommentId', '==', parentCommentId),
-      orderBy('createdAt', 'desc'),
-      limit(20)
-    );
-    
-    return onSnapshot(commentsQuery, (snapshot) => {
-      const comments = [];
-      snapshot.forEach(doc => {
-        comments.push({ id: doc.id, ...doc.data() });
-      });
-      callback(comments);
-    });
-  }
+  // ==================== FOLLOW SYSTEM ====================
 
-  // ==================== FOLLOWS ====================
-  
   async followUser(followerId, followingId) {
     if (followerId === followingId) {
       throw new Error('Cannot follow yourself');
     }
-    
+
     try {
-      return await runTransaction(db, async (transaction) => {
-        const followerRef = doc(db, 'users', followerId);
-        const followingRef = doc(db, 'users', followingId);
-        const followRelationRef = doc(db, 'follows', `${followerId}_${followingId}`);
-        
-        const followRelationDoc = await transaction.get(followRelationRef);
-        
-        if (followRelationDoc.exists()) {
-          throw new Error('Already following this user');
-        }
-        
-        // Create follow relationship
-        transaction.set(followRelationRef, {
-          followerId,
-          followingId,
-          createdAt: serverTimestamp()
-        });
-        
-        // Update follower's following count
-        const followerDoc = await transaction.get(followerRef);
-        if (followerDoc.exists()) {
-          const currentFollowing = followerDoc.data().stats?.followingCount || 0;
-          transaction.update(followerRef, {
-            'stats.followingCount': currentFollowing + 1
-          });
-        }
-        
-        // Update following's followers count
-        const followingDoc = await transaction.get(followingRef);
-        if (followingDoc.exists()) {
-          const currentFollowers = followingDoc.data().stats?.followersCount || 0;
-          transaction.update(followingRef, {
-            'stats.followersCount': currentFollowers + 1
-          });
-        }
-        
-        return true;
+      const batch = writeBatch(db);
+      
+      // Create follow relationship
+      const followRef = doc(db, 'follows', `${followerId}_${followingId}`);
+      batch.set(followRef, {
+        followerId,
+        followingId,
+        createdAt: serverTimestamp()
       });
+
+      // Update follower's following count
+      const followerRef = doc(db, 'users', followerId);
+      batch.update(followerRef, {
+        'stats.followingCount': increment(1)
+      });
+
+      // Update following user's followers count
+      const followingRef = doc(db, 'users', followingId);
+      batch.update(followingRef, {
+        'stats.followersCount': increment(1)
+      });
+
+      // Create notification
+      const notificationRef = doc(collection(db, 'notifications'));
+      batch.set(notificationRef, {
+        userId: followingId,
+        type: 'follow',
+        fromUserId: followerId,
+        createdAt: serverTimestamp(),
+        read: false
+      });
+
+      await batch.commit();
+      return true;
     } catch (error) {
       console.error('Error following user:', error);
       throw error;
@@ -312,316 +118,409 @@ class SocialService {
 
   async unfollowUser(followerId, followingId) {
     try {
-      return await runTransaction(db, async (transaction) => {
-        const followerRef = doc(db, 'users', followerId);
-        const followingRef = doc(db, 'users', followingId);
-        const followRelationRef = doc(db, 'follows', `${followerId}_${followingId}`);
-        
-        const followRelationDoc = await transaction.get(followRelationRef);
-        
-        if (!followRelationDoc.exists()) {
-          throw new Error('Not following this user');
-        }
-        
-        // Delete follow relationship
-        transaction.delete(followRelationRef);
-        
-        // Update follower's following count
-        const followerDoc = await transaction.get(followerRef);
-        if (followerDoc.exists()) {
-          const currentFollowing = followerDoc.data().stats?.followingCount || 0;
-          transaction.update(followerRef, {
-            'stats.followingCount': Math.max(0, currentFollowing - 1)
-          });
-        }
-        
-        // Update following's followers count
-        const followingDoc = await transaction.get(followingRef);
-        if (followingDoc.exists()) {
-          const currentFollowers = followingDoc.data().stats?.followersCount || 0;
-          transaction.update(followingRef, {
-            'stats.followersCount': Math.max(0, currentFollowers - 1)
-          });
-        }
-        
-        return true;
+      const batch = writeBatch(db);
+      
+      // Remove follow relationship
+      const followRef = doc(db, 'follows', `${followerId}_${followingId}`);
+      batch.delete(followRef);
+
+      // Update follower's following count
+      const followerRef = doc(db, 'users', followerId);
+      batch.update(followerRef, {
+        'stats.followingCount': increment(-1)
       });
+
+      // Update following user's followers count
+      const followingRef = doc(db, 'users', followingId);
+      batch.update(followingRef, {
+        'stats.followersCount': increment(-1)
+      });
+
+      await batch.commit();
+      return true;
     } catch (error) {
       console.error('Error unfollowing user:', error);
       throw error;
     }
   }
 
-  async checkIfFollowing(followerId, followingId) {
+  async checkFollowStatus(followerId, followingId) {
+    if (!followerId || !followingId) return { isFollowing: false };
+    
     try {
       const followDoc = await getDoc(doc(db, 'follows', `${followerId}_${followingId}`));
-      return followDoc.exists();
+      return { isFollowing: followDoc.exists() };
     } catch (error) {
       console.error('Error checking follow status:', error);
-      return false;
+      return { isFollowing: false };
     }
   }
 
-  async getFollowers(userId, limitCount = 20) {
+  async getFollowers(userId) {
     try {
-      const followsQuery = query(
+      const q = query(
         collection(db, 'follows'),
         where('followingId', '==', userId),
-        orderBy('createdAt', 'desc'),
-        limit(limitCount)
+        limit(100)
       );
+
+      const snapshot = await getDocs(q);
+      const followerIds = [];
       
-      const snapshot = await getDocs(followsQuery);
-      const followerIds = snapshot.docs.map(doc => doc.data().followerId);
-      
-      // Get user details for followers
+      snapshot.forEach(doc => {
+        followerIds.push(doc.data().followerId);
+      });
+
+      // Get user profiles for followers
       const followers = [];
       for (const followerId of followerIds) {
-        const userDoc = await getDoc(doc(db, 'users', followerId));
-        if (userDoc.exists()) {
-          followers.push({ id: userDoc.id, ...userDoc.data() });
+        try {
+          const userProfile = await this.getUserProfile(followerId);
+          if (userProfile) {
+            followers.push(userProfile);
+          }
+        } catch (error) {
+          console.warn(`Failed to get profile for follower ${followerId}:`, error);
         }
       }
-      
+
       return followers;
     } catch (error) {
       console.error('Error getting followers:', error);
-      throw error;
+      return [];
     }
   }
 
-  async getFollowing(userId, limitCount = 20) {
+  async getFollowing(userId) {
     try {
-      const followsQuery = query(
+      const q = query(
         collection(db, 'follows'),
         where('followerId', '==', userId),
-        orderBy('createdAt', 'desc'),
-        limit(limitCount)
+        limit(100)
       );
+
+      const snapshot = await getDocs(q);
+      const followingIds = [];
       
-      const snapshot = await getDocs(followsQuery);
-      const followingIds = snapshot.docs.map(doc => doc.data().followingId);
-      
-      // Get user details for following
+      snapshot.forEach(doc => {
+        followingIds.push(doc.data().followingId);
+      });
+
+      // Get user profiles for following
       const following = [];
       for (const followingId of followingIds) {
-        const userDoc = await getDoc(doc(db, 'users', followingId));
-        if (userDoc.exists()) {
-          following.push({ id: userDoc.id, ...userDoc.data() });
+        try {
+          const userProfile = await this.getUserProfile(followingId);
+          if (userProfile) {
+            following.push(userProfile);
+          }
+        } catch (error) {
+          console.warn(`Failed to get profile for following ${followingId}:`, error);
         }
       }
-      
+
       return following;
     } catch (error) {
       console.error('Error getting following:', error);
-      throw error;
-    }
-  }
-
-  // ==================== BOOKMARKS ====================
-  
-  async toggleBookmark(storyId, userId) {
-    try {
-      return await runTransaction(db, async (transaction) => {
-        const bookmarkRef = doc(db, 'users', userId, 'bookmarks', storyId);
-        const storyRef = doc(db, 'stories', storyId);
-        
-        const bookmarkDoc = await transaction.get(bookmarkRef);
-        const storyDoc = await transaction.get(storyRef);
-        
-        if (!storyDoc.exists()) {
-          throw new Error('Story not found');
-        }
-        
-        const isBookmarked = bookmarkDoc.exists();
-        const currentBookmarks = storyDoc.data().stats?.bookmarksCount || 0;
-        
-        if (isBookmarked) {
-          // Remove bookmark
-          transaction.delete(bookmarkRef);
-          transaction.update(storyRef, {
-            'stats.bookmarksCount': Math.max(0, currentBookmarks - 1)
-          });
-          return false;
-        } else {
-          // Add bookmark
-          transaction.set(bookmarkRef, {
-            storyId,
-            userId,
-            createdAt: serverTimestamp()
-          });
-          transaction.update(storyRef, {
-            'stats.bookmarksCount': currentBookmarks + 1
-          });
-          return true;
-        }
-      });
-    } catch (error) {
-      console.error('Error toggling bookmark:', error);
-      throw error;
-    }
-  }
-
-  async getUserBookmarks(userId, limitCount = 20) {
-    try {
-      const bookmarksQuery = query(
-        collection(db, 'users', userId, 'bookmarks'),
-        orderBy('createdAt', 'desc'),
-        limit(limitCount)
-      );
-      
-      const snapshot = await getDocs(bookmarksQuery);
-      const storyIds = snapshot.docs.map(doc => doc.data().storyId);
-      
-      // Get story details for bookmarks
-      const stories = [];
-      for (const storyId of storyIds) {
-        const storyDoc = await getDoc(doc(db, 'stories', storyId));
-        if (storyDoc.exists()) {
-          stories.push({ id: storyDoc.id, ...storyDoc.data() });
-        }
-      }
-      
-      return stories;
-    } catch (error) {
-      console.error('Error getting user bookmarks:', error);
-      throw error;
-    }
-  }
-
-  async checkIfBookmarked(storyId, userId) {
-    try {
-      const bookmarkDoc = await getDoc(doc(db, 'users', userId, 'bookmarks', storyId));
-      return bookmarkDoc.exists();
-    } catch (error) {
-      console.error('Error checking bookmark status:', error);
-      return false;
-    }
-  }
-
-  // ==================== SHARING ====================
-  
-  async shareStory(storyId, userId, platform = 'link') {
-    try {
-      // Track share analytics
-      const shareRef = doc(collection(db, 'stories', storyId, 'shares'));
-      await addDoc(collection(db, 'stories', storyId, 'shares'), {
-        userId,
-        platform,
-        createdAt: serverTimestamp()
-      });
-      
-      // Update story share count
-      const storyRef = doc(db, 'stories', storyId);
-      await updateDoc(storyRef, {
-        'stats.sharesCount': increment(1),
-        'stats.lastActivity': serverTimestamp()
-      });
-      
-      return true;
-    } catch (error) {
-      console.error('Error tracking share:', error);
-      throw error;
-    }
-  }
-
-  // ==================== ACTIVITY FEED ====================
-  
-  async getUserActivity(userId, limitCount = 20) {
-    try {
-      // Get recent likes
-      const likesQuery = query(
-        collection(db, 'stories'),
-        where('votes.' + userId, '!=', null),
-        orderBy('stats.lastActivity', 'desc'),
-        limit(limitCount)
-      );
-      
-      const likesSnapshot = await getDocs(likesQuery);
-      const activities = [];
-      
-      likesSnapshot.forEach(doc => {
-        activities.push({
-          type: 'like',
-          storyId: doc.id,
-          story: doc.data(),
-          timestamp: doc.data().stats?.lastActivity || doc.data().createdAt
-        });
-      });
-      
-      // Sort by timestamp
-      activities.sort((a, b) => {
-        const aTime = a.timestamp?.toMillis() || 0;
-        const bTime = b.timestamp?.toMillis() || 0;
-        return bTime - aTime;
-      });
-      
-      return activities.slice(0, limitCount);
-    } catch (error) {
-      console.error('Error getting user activity:', error);
-      throw error;
+      return [];
     }
   }
 
   // ==================== NOTIFICATIONS ====================
-  
-  async createNotification(userId, type, data) {
+
+  async getNotifications(userId, limitCount = 20) {
     try {
-      await addDoc(collection(db, 'users', userId, 'notifications'), {
-        type, // 'like', 'comment', 'follow', 'mention'
-        data,
-        read: false,
-        createdAt: serverTimestamp()
-      });
+      const q = query(
+        collection(db, 'notifications'),
+        where('userId', '==', userId),
+        orderBy('createdAt', 'desc'),
+        limit(limitCount)
+      );
+
+      const snapshot = await getDocs(q);
+      const notifications = [];
+      
+      for (const docSnap of snapshot.docs) {
+        const notification = { id: docSnap.id, ...docSnap.data() };
+        
+        // Get user profile for the notification sender
+        if (notification.fromUserId) {
+          try {
+            const fromUser = await this.getUserProfile(notification.fromUserId);
+            notification.fromUser = fromUser;
+          } catch (error) {
+            console.warn(`Failed to get profile for notification sender ${notification.fromUserId}:`, error);
+          }
+        }
+        
+        notifications.push(notification);
+      }
+
+      return notifications;
     } catch (error) {
-      console.error('Error creating notification:', error);
+      console.error('Error getting notifications:', error);
+      return [];
     }
   }
 
-  async markNotificationAsRead(userId, notificationId) {
+  async markNotificationAsRead(notificationId) {
     try {
-      const notificationRef = doc(db, 'users', userId, 'notifications', notificationId);
+      const notificationRef = doc(db, 'notifications', notificationId);
       await updateDoc(notificationRef, {
         read: true,
         readAt: serverTimestamp()
       });
+      return true;
     } catch (error) {
       console.error('Error marking notification as read:', error);
       throw error;
     }
   }
 
-  async getUserNotifications(userId, limitCount = 20) {
+  async markAllNotificationsAsRead(userId) {
     try {
-      const notificationsQuery = query(
-        collection(db, 'users', userId, 'notifications'),
-        orderBy('createdAt', 'desc'),
-        limit(limitCount)
+      const q = query(
+        collection(db, 'notifications'),
+        where('userId', '==', userId),
+        where('read', '==', false)
       );
-      
-      const snapshot = await getDocs(notificationsQuery);
-      return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+      const snapshot = await getDocs(q);
+      const batch = writeBatch(db);
+
+      snapshot.forEach(doc => {
+        batch.update(doc.ref, {
+          read: true,
+          readAt: serverTimestamp()
+        });
+      });
+
+      await batch.commit();
+      return true;
     } catch (error) {
-      console.error('Error getting notifications:', error);
+      console.error('Error marking all notifications as read:', error);
       throw error;
     }
   }
 
-  subscribeToNotifications(userId, callback) {
-    const notificationsQuery = query(
-      collection(db, 'users', userId, 'notifications'),
-      where('read', '==', false),
-      orderBy('createdAt', 'desc'),
-      limit(10)
-    );
+  // ==================== ACTIVITY FEED ====================
+
+  async getRecentActivity(userId, limitCount = 20) {
+    try {
+      // Get notifications as activity
+      const notifications = await this.getNotifications(userId, limitCount);
+      
+      // Transform notifications into activity format
+      const activities = notifications.map(notification => ({
+        id: notification.id,
+        type: notification.type,
+        user: notification.fromUser?.displayName || 'Someone',
+        userAvatar: notification.fromUser?.photoURL,
+        userId: notification.fromUserId,
+        action: this.getActivityAction(notification.type),
+        story: notification.storyTitle,
+        storyId: notification.storyId,
+        time: this.formatTimeAgo(notification.createdAt),
+        timestamp: notification.createdAt,
+        read: notification.read
+      }));
+
+      return activities;
+    } catch (error) {
+      console.error('Error getting recent activity:', error);
+      return [];
+    }
+  }
+
+  getActivityAction(type) {
+    const actions = {
+      'like': 'liked your story',
+      'comment': 'commented on your story',
+      'follow': 'started following you',
+      'bookmark': 'bookmarked your story',
+      'share': 'shared your story'
+    };
+    return actions[type] || 'interacted with your content';
+  }
+
+  formatTimeAgo(timestamp) {
+    if (!timestamp) return '';
     
-    return onSnapshot(notificationsQuery, (snapshot) => {
-      const notifications = [];
-      snapshot.forEach(doc => {
-        notifications.push({ id: doc.id, ...doc.data() });
+    const now = new Date();
+    const time = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+    const diffInSeconds = Math.floor((now - time) / 1000);
+
+    if (diffInSeconds < 60) return `${diffInSeconds}s ago`;
+    if (diffInSeconds < 3600) return `${Math.floor(diffInSeconds / 60)}m ago`;
+    if (diffInSeconds < 86400) return `${Math.floor(diffInSeconds / 3600)}h ago`;
+    if (diffInSeconds < 604800) return `${Math.floor(diffInSeconds / 86400)}d ago`;
+    
+    return time.toLocaleDateString();
+  }
+
+  // ==================== REAL-TIME LISTENERS ====================
+
+  subscribeToNotifications(userId, callback) {
+    try {
+      const q = query(
+        collection(db, 'notifications'),
+        where('userId', '==', userId),
+        orderBy('createdAt', 'desc'),
+        limit(50)
+      );
+
+      return onSnapshot(q, async (snapshot) => {
+        const notifications = [];
+        
+        for (const docSnap of snapshot.docs) {
+          const notification = { id: docSnap.id, ...docSnap.data() };
+          
+          // Get user profile for the notification sender
+          if (notification.fromUserId) {
+            try {
+              const fromUser = await this.getUserProfile(notification.fromUserId);
+              notification.fromUser = fromUser;
+            } catch (error) {
+              console.warn(`Failed to get profile for notification sender ${notification.fromUserId}:`, error);
+            }
+          }
+          
+          notifications.push(notification);
+        }
+        
+        callback(notifications);
       });
-      callback(notifications);
-    });
+    } catch (error) {
+      console.error('Error setting up notifications listener:', error);
+      throw error;
+    }
+  }
+
+  subscribeToActivity(userId, callback) {
+    try {
+      return this.subscribeToNotifications(userId, (notifications) => {
+        const activities = notifications.map(notification => ({
+          id: notification.id,
+          type: notification.type,
+          user: notification.fromUser?.displayName || 'Someone',
+          userAvatar: notification.fromUser?.photoURL,
+          userId: notification.fromUserId,
+          action: this.getActivityAction(notification.type),
+          story: notification.storyTitle,
+          storyId: notification.storyId,
+          time: this.formatTimeAgo(notification.createdAt),
+          timestamp: notification.createdAt,
+          read: notification.read
+        }));
+        
+        callback(activities);
+      });
+    } catch (error) {
+      console.error('Error setting up activity listener:', error);
+      throw error;
+    }
+  }
+
+  // ==================== COMMENTS ====================
+
+  async addComment(storyId, userId, content) {
+    try {
+      const commentRef = await addDoc(collection(db, 'comments'), {
+        storyId,
+        userId,
+        content,
+        createdAt: serverTimestamp(),
+        likesCount: 0
+      });
+
+      // Update story comments count
+      const storyRef = doc(db, 'stories', storyId);
+      await updateDoc(storyRef, {
+        'stats.commentsCount': increment(1)
+      });
+
+      // Create notification for story author
+      const storyDoc = await getDoc(storyRef);
+      if (storyDoc.exists()) {
+        const story = storyDoc.data();
+        if (story.authorId !== userId) {
+          await addDoc(collection(db, 'notifications'), {
+            userId: story.authorId,
+            type: 'comment',
+            fromUserId: userId,
+            storyId,
+            storyTitle: story.title,
+            commentId: commentRef.id,
+            createdAt: serverTimestamp(),
+            read: false
+          });
+        }
+      }
+
+      return { id: commentRef.id };
+    } catch (error) {
+      console.error('Error adding comment:', error);
+      throw error;
+    }
+  }
+
+  async getComments(storyId, limitCount = 50) {
+    try {
+      const q = query(
+        collection(db, 'comments'),
+        where('storyId', '==', storyId),
+        orderBy('createdAt', 'desc'),
+        limit(limitCount)
+      );
+
+      const snapshot = await getDocs(q);
+      const comments = [];
+      
+      for (const docSnap of snapshot.docs) {
+        const comment = { id: docSnap.id, ...docSnap.data() };
+        
+        // Get user profile for comment author
+        try {
+          const userProfile = await this.getUserProfile(comment.userId);
+          comment.author = userProfile;
+        } catch (error) {
+          console.warn(`Failed to get profile for comment author ${comment.userId}:`, error);
+        }
+        
+        comments.push(comment);
+      }
+
+      return comments;
+    } catch (error) {
+      console.error('Error getting comments:', error);
+      return [];
+    }
+  }
+
+  // ==================== SEARCH USERS ====================
+
+  async searchUsers(searchQuery, limitCount = 20) {
+    try {
+      // Simple search by display name
+      const q = query(
+        collection(db, 'users'),
+        where('displayName', '>=', searchQuery),
+        where('displayName', '<=', searchQuery + '\uf8ff'),
+        limit(limitCount)
+      );
+
+      const snapshot = await getDocs(q);
+      const users = [];
+      
+      snapshot.forEach(doc => {
+        users.push({ id: doc.id, ...doc.data() });
+      });
+
+      return users;
+    } catch (error) {
+      console.error('Error searching users:', error);
+      return [];
+    }
   }
 }
 
